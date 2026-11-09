@@ -4,6 +4,7 @@ import csv
 import json
 import os
 import shlex
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -30,6 +31,41 @@ def saved_campaigns():
 def read_results(campaign):
     with (Path(campaign) / "results.csv").open(newline="") as source:
         return list(csv.DictReader(source))
+
+
+
+def run_comparison(model, harnesses, suite="demo", attempts=1):
+    """Run a local campaign in the notebook kernel with per-trial progress."""
+    from tqdm.auto import tqdm
+
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    import bench
+
+    plan = bench.build_plan(
+        suite, harnesses, dict.fromkeys(harnesses, model), attempts, local=True
+    )
+    campaign = None
+    with tqdm(total=plan["runs"], desc="Harness comparison", unit="trial") as bar:
+        def progress(event, data):
+            nonlocal campaign
+            if event == "campaign":
+                campaign = data["path"]
+            elif event == "trial_start":
+                bar.set_postfix(harness=data["harness"], task=data["task"], status="running")
+            elif event == "trial_end":
+                result = data["result"]
+                error = result.get("exception_info") or {}
+                rewards = (result.get("verifier_result") or {}).get("rewards") or {}
+                status = error.get("exception_type") or (
+                    "passed" if rewards.get("reward") == 1 else
+                    "failed" if rewards else "incomplete"
+                )
+                bar.set_postfix(harness=data["harness"], task=data["task"], status=status)
+                bar.update(1)
+
+        bench.execute(plan, progress=progress)
+    return campaign
 
 
 def main():

@@ -210,7 +210,7 @@ def report(campaign):
     return rows
 
 
-def execute(plan, provider_cap=None, install_only=False):
+def execute(plan, provider_cap=None, install_only=False, progress=None):
     settings, registry = read_config()
     paid = plan['reserved_eur'] > 0 and not install_only
     if paid:
@@ -252,6 +252,8 @@ def execute(plan, provider_cap=None, install_only=False):
         cell['job'] = f'{stamp}-{i:03}-{cell["harness"]}'
     manifest['config_hashes'] = {p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in (ROOT/'config').glob('*.toml')}
     (campaign / 'manifest.json').write_text(json.dumps(manifest, indent=2))
+    if progress:
+        progress('campaign', {'path': campaign, 'total': len(manifest['cells'])})
     static_bytes = initial_bytes - folder_bytes(ROOT/'runs')
     try:
         for cell in manifest['cells']:
@@ -261,7 +263,10 @@ def execute(plan, provider_cap=None, install_only=False):
             config = job_config(cell, cell['job'], install_only, snapshot=(settings, registry), local=plan.get('local', False))
             path = campaign / (cell['job']+'.json')
             path.write_text(json.dumps(config, indent=2))
-            print(f'{cell["harness"]}: {cell["task"]}', flush=True)
+            if progress:
+                progress('trial_start', cell)
+            else:
+                print(f'{cell["harness"]}: {cell["task"]}', flush=True)
             with (campaign / (cell['job']+'.log')).open('w') as log:
                 process = subprocess.Popen([*HARBOR_COMMAND,'run','-c',str(path)], env=runtime_env(), stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
                 try:
@@ -277,6 +282,10 @@ def execute(plan, provider_cap=None, install_only=False):
                         os.killpg(process.pid, signal.SIGKILL)
                         process.wait()
                     raise
+            latest = list((ROOT/'runs/jobs'/cell['job']).glob('*/result.json'))
+            result = json.loads(latest[0].read_text()) if latest else {}
+            if progress:
+                progress('trial_end', dict(cell, result=result, returncode=process.returncode))
             if process.returncode:
                 raise RuntimeError(f'Harbor failed; see {log.name}')
             latest = list((ROOT/'runs/jobs'/cell['job']).glob('*/result.json'))
