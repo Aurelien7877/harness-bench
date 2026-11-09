@@ -20,7 +20,7 @@ def test_budget_rejects_oversized_campaign():
 def test_small_plan_reproducible_and_free_oracle():
     a = bench.build_plan('quick', ['omp','pi'], {}, 1)
     assert a == bench.build_plan('quick', ['omp','pi'], {}, 1)
-    assert a['runs'] == 10 and a['reserved_eur'] == 10
+    assert a['runs'] == 12 and a['reserved_eur'] == 12
     assert bench.build_plan('full', ['oracle','nop'], {}, 2)['reserved_eur'] == 0
 
 
@@ -81,7 +81,7 @@ def test_report_preserves_errors_and_unknown_cost(tmp_path, monkeypatch):
     result = tmp_path/'runs/jobs/one/trial/result.json'; result.parent.mkdir(parents=True)
     result.write_text(json.dumps({'verifier_result':{'rewards':{'reward':1}},'agent_result':{}}))
     rows = bench.report(campaign)
-    assert len(rows) == 2 and rows[1]['status']=='incomplete'
+    assert len(rows) == 2 and rows[1]['status']=='not_run'
     assert all(r['cost_usd'] is None for r in rows)
     assert '1/2' in (campaign/'report.md').read_text()
 
@@ -101,3 +101,91 @@ def test_local_pair_uses_same_weights_and_no_provider_credential(monkeypatch):
             assert agent['skip_model_parsing']
     with pytest.raises(ValueError, match='Local inference'):
         bench.build_plan('demo', ['claude'], {'claude': 'qwen3:4b'}, local=True)
+
+
+def test_timeout_keeps_its_status_even_with_a_zero_grade():
+    from scripts.campaign_results import classify
+    result = {
+        "exception_info": {"exception_type": "AgentTimeoutError"},
+        "verifier_result": {"rewards": {"reward": 0}},
+    }
+    assert classify(result) == "timeout"
+    assert classify({"verifier_result":{"rewards":{"reward":0}}}) == "incorrect"
+    assert classify({}) == "not_run"
+
+
+def test_startup_runs_before_analysis():
+    plan = bench.build_plan("demo", ["pi","opencode"], {}, local=True)
+    assert [c["task"] for c in plan["cells"][:2]] == ["startup","startup"]
+
+
+def test_local_limits_reach_all_adapters():
+    settings, registry = bench.read_config()
+    settings.update(context_window=16384,max_output_tokens=2048,timeout_sec=300)
+    for harness in ("pi","opencode","droid","dsh"):
+        cell = {"harness":harness,"model":"lfm3:1.7b","task":"startup"}
+        agent = bench.job_config(cell,"test",local=True,snapshot=(settings,registry))["agents"][0]
+        assert agent["override_timeout_sec"] == 300
+        if harness == "opencode":
+            limits = agent["kwargs"]["opencode_config"]["provider"]["bench-local"]["models"]["lfm3:1.7b"]["limit"]
+            assert limits == {"context":16384,"output":2048}
+        else:
+            assert agent["kwargs"]["local_context"] == 16384
+            assert agent["kwargs"]["local_output"] == 2048
+
+
+@pytest.mark.parametrize("failure", [RuntimeError("adapter failed"), KeyboardInterrupt()])
+def test_notebook_returns_partial_campaign_after_failure(tmp_path, monkeypatch, failure):
+    import sys
+    sys.path.insert(0,str(bench.ROOT/"scripts"))
+    import local_comparison
+    import tqdm.auto
+
+    bars = []
+    class Bar:
+        def __init__(self, **kwargs):
+            self.closed = False
+            self.count = 0
+            bars.append(self)
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            self.closed = True
+        def set_postfix(self, **kwargs):
+            pass
+        def set_description(self, text):
+            pass
+        def update(self, count):
+            self.count += count
+
+    def fail(plan, progress, settings_override):
+        assert settings_override["timeout_sec"] == 300
+        progress("campaign", {"path":tmp_path, "total":plan["runs"]})
+        raise failure
+
+    monkeypatch.setattr(tqdm.auto,"tqdm",Bar)
+    monkeypatch.setattr(bench,"execute",fail)
+    result = local_comparison.run_comparison(
+        "lfm3:1.7b",["pi"],timeout_sec=300
+    )
+    assert result == tmp_path
+    assert bars[-1].closed
+    assert bars[-1].count == 0
+
+
+def test_percentage_plots_keep_zero_and_runtime_axes_separate():
+    matplotlib = pytest.importorskip("matplotlib")
+    matplotlib.use("Agg")
+    from scripts.campaign_results import plot_results
+    import matplotlib.pyplot as plt
+    rows = [dict(harness="a", status="timeout", agent_seconds="180",
+                 criteria_json=json.dumps({"mrr": False})),
+            dict(harness="b", status="incorrect", agent_seconds="120",
+                 criteria_json="{}")]
+    figure = plot_results(rows)
+    assert "0% (0/1)" in [t.get_text() for t in figure.axes[0].texts]
+    assert figure.axes[0].get_xlim() == (0, 100)
+    assert figure.axes[2].get_xlim()[1] > 180
+    assert figure.axes[3].get_xlim()[1] < 10
+    assert "N/A" in [t.get_text() for t in figure.axes[3].texts]
+    plt.close(figure)

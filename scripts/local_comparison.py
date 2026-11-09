@@ -34,7 +34,7 @@ def read_results(campaign):
 
 
 
-def run_comparison(model, harnesses, suite="demo", attempts=1):
+def run_comparison(model, harnesses, suite="demo", attempts=1, *, timeout_sec=180, context_window=32768, max_output_tokens=8192):
     """Run a local campaign in the notebook kernel with per-trial progress."""
     from tqdm.auto import tqdm
 
@@ -46,6 +46,7 @@ def run_comparison(model, harnesses, suite="demo", attempts=1):
         suite, harnesses, dict.fromkeys(harnesses, model), attempts, local=True
     )
     campaign = None
+    from scripts.campaign_results import classify
     with tqdm(total=plan["runs"], desc="Harness comparison", unit="trial") as bar:
         def progress(event, data):
             nonlocal campaign
@@ -53,18 +54,30 @@ def run_comparison(model, harnesses, suite="demo", attempts=1):
                 campaign = data["path"]
             elif event == "trial_start":
                 bar.set_postfix(harness=data["harness"], task=data["task"], status="running")
+            elif event == "heartbeat":
+                idle = data["idle_seconds"]
+                bar.set_postfix(harness=data["harness"], task=data["task"],
+                                event=data["last_event"] or "awaiting events",
+                                idle="unknown" if idle is None else f"{idle:.0f}s")
             elif event == "trial_end":
                 result = data["result"]
-                error = result.get("exception_info") or {}
-                rewards = (result.get("verifier_result") or {}).get("rewards") or {}
-                status = error.get("exception_type") or (
-                    "passed" if rewards.get("reward") == 1 else
-                    "failed" if rewards else "incomplete"
-                )
-                bar.set_postfix(harness=data["harness"], task=data["task"], status=status)
+                bar.set_postfix(harness=data["harness"], task=data["task"],
+                                status=classify(result,started=True))
                 bar.update(1)
 
-        bench.execute(plan, progress=progress)
+        try:
+            bench.execute(plan, progress=progress, settings_override={
+                'timeout_sec':timeout_sec, 'context_window':context_window,
+                'max_output_tokens':max_output_tokens,
+            })
+        except (Exception, KeyboardInterrupt) as error:
+            bar.set_description("Comparison stopped")
+            if campaign is None:
+                raise
+            print(f"Stopped: {type(error).__name__}: {error}")
+            print(f"Partial results and logs: {campaign}")
+        else:
+            bar.set_description("Comparison finished")
     return campaign
 
 

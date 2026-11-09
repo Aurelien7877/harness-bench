@@ -4,11 +4,13 @@ reserve_eur_per_trial = 1.0
 max_folder_gb = 20.0
 stop_folder_gb = 18.0
 timeout_sec = 180
+context_window = 32768
+max_output_tokens = 8192
 attempts = 1
 seed = 20261104
 
 [suites]
-demo = ["ds-retrieval"]
-smoke = ["humaneval-0", "ds-aggregation"]
-quick = ["humaneval-0", "ds-aggregation", "ds-retrieval", "research-evidence", "general-reconciliation"]
-full = ["humaneval-0", "humaneval-12", "ds-aggregation", "ds-retrieval", "ds-leakage", "research-evidence", "general-reconciliation", "context-revisions"]
+demo = ["startup", "ds-retrieval"]
+smoke = ["startup", "humaneval-0", "ds-aggregation"]
+quick = ["startup", "humaneval-0", "ds-aggregation", "ds-retrieval", "research-evidence", "general-reconciliation"]
+full = ["startup", "humaneval-0", "humaneval-12", "ds-aggregation", "ds-retrieval", "ds-leakage", "research-evidence", "general-reconciliation", "context-revisions"]

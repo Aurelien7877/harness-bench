@@ -1,0 +1,15 @@
+schema_version = "1.4"
+[metadata]
+category = "startup"
+author_name = "Personal harness benchmark"
+difficulty = "easy"
+source = "personal-v1; synthetic data; held-out input"
+[agent]
+timeout_sec = 180
+[verifier]
+timeout_sec = 30
+[environment]
+build_timeout_sec = 300
+cpus = 2
+memory_mb = 2048
+workdir = "/workspace"

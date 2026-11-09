@@ -7,13 +7,13 @@
 [![Local inference with Ollama](https://img.shields.io/badge/local_inference-Ollama-16765f?style=flat-square)](#try-the-local-demo)
 [![Open the Python notebook](https://img.shields.io/badge/Jupyter-open_notebook-b54f20?style=flat-square)](notebooks/local-comparison.ipynb)
 [![Seven harness configurations](https://img.shields.io/badge/harnesses-7-514d9b?style=flat-square)](config/harnesses.toml)
-[![Eight graded tasks](https://img.shields.io/badge/graded_tasks-8-275f85?style=flat-square)](#inside-the-benchmark)
+[![Nine graded tasks](https://img.shields.io/badge/graded_tasks-9-275f85?style=flat-square)](#inside-the-benchmark)
 
 Choosing an AI agent harness? Start with a few tasks you care about. Compare how agents handle Python, data science, research and everyday work, then inspect their outputs, runtime and failures to decide what fits your workflow.
 
-Eight tasks, a Python notebook and a local Ollama demo get you started. Pi and OpenCode receive the same model, input files and time limit. Add another harness or bring your own tasks as your needs change.
+Nine tasks, a Python notebook and a local Ollama demo get you started. Pi and OpenCode receive the same model, input files and time limit. Add another harness or bring your own tasks as your needs change.
 
-The first experiment asks each harness to evaluate two search systems. Both agents see one set of rankings. The grader runs each agent’s Python program on a second set and checks its recall and reciprocal rank. You can inspect the programs alongside the scores.
+The demo starts with a small file and Python check, then asks each harness to evaluate two search systems. All agents see one set of rankings. The grader runs each agent’s Python program on a second set and checks its recall and reciprocal rank. You can inspect the programs alongside the scores.
 
 [Open the notebook](notebooks/local-comparison.ipynb) · [Try the local demo](#try-the-local-demo) · [Browse the tasks](tasks) · [Add a harness](#extend-the-benchmark)
 
@@ -29,21 +29,22 @@ ollama pull lfm3:1.7b
 python3 scripts/local_comparison.py
 ```
 
-The last line **previews the command**. When you are ready to run one task with both harnesses, use `./bench local`. The [LFM3 1.7B weights](https://ollama.com/library/lfm3:1.7b) occupy about 1.1–1.7 GB in Ollama’s model store. Each agent gets a fresh Docker container with its pinned CLI. LFM3 is intended for small local agents and structured tool use. Its model card cautions against complex agentic coding, so start with the short tasks and inspect any failures.
+The last line **previews the command**. When you are ready to run the demo with both harnesses, use `./bench local`. The [LFM3 1.7B weights](https://ollama.com/library/lfm3:1.7b) occupy about 1.1–1.7 GB in Ollama’s model store. Each agent gets a fresh Docker container with its pinned CLI. LFM3 is intended for small local agents and structured tool use. Its model card cautions against complex agentic coding, so start with the short tasks and inspect any failures.
 
-**Prefer Jupyter?** Open the [comparison notebook](notebooks/local-comparison.ipynb), choose a model and a task suite, then run the preparation and comparison cells. **Run All** starts the complete workflow. The preparation cell builds the shared image and downloads the selected model when needed. The comparison cell runs the trials with a tqdm progress bar, then displays the saved report. The [companion script](scripts/local_comparison.py) also accepts `--run` when you want to start inference.
+**Prefer Jupyter?** Open the [comparison notebook](notebooks/local-comparison.ipynb), choose a model and a task suite, then run the preparation and comparison cells. The notebook opens saved results by default. For a new campaign, the preparation cell builds the shared image and downloads the selected model when needed. Set run_new_campaign to True to run with tqdm progress, then inspect success percentages, outcome breakdowns, runtime and diagnostic checks. The [companion script](scripts/local_comparison.py) also accepts `--run` when you want to start inference.
 
 ## Inside the benchmark
 
 | Category | Tasks | What the grader checks |
 |---|---:|---|
+| Startup | 1 | Read a file, write a script and calculate a count and sum on two inputs. |
 | Python coding | 2 | Two [HumanEval](https://github.com/openai/human-eval) functions pass their original tests. |
 | Data science | 3 | A sales aggregation handles duplicates and refunds. A retrieval script computes recall@3 and MRR@3. A leakage audit identifies features that use future information. |
 | Research | 1 | A recommendation cites the authoritative sources in a small collection of conflicting reports. |
 | General work | 1 | Invoice balances reconcile after partial payments, duplicated records and excess credit. |
 | Context retrieval | 1 | The agent recovers the latest budget and region from a file of revised instructions. |
 
-Pick `demo` for **1 task**, `smoke` for **2**, `quick` for **5** or `full` for **8**. For example, this previews **20 trials** across two harnesses, five tasks and two attempts.
+Pick `demo` for **2 tasks**, `smoke` for **3**, `quick` for **6** or `full` for **9**. For example, this previews **24 trials** across two harnesses, six tasks and two attempts.
 
 ```sh
 python3 scripts/local_comparison.py --suite quick --attempts 2
@@ -96,7 +97,7 @@ make test
 ./bench doctor
 ```
 
-The reference solutions should score 8/8 and the idle agent 0/8. These checks use no model key. Trials run sequentially and share a Docker base image. The project’s storage guard stops campaigns at 18 GB in the project folder. Docker layers and Ollama weights live in their own stores.
+The reference solutions should score 9/9 and the idle agent 0/9. These checks use no model key. Trials run sequentially and share a Docker base image. The project’s storage guard stops campaigns at 18 GB in the project folder. Docker layers and Ollama weights live in their own stores.
 
 </details>
 

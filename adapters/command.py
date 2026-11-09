@@ -13,9 +13,11 @@ class CommandAgent(BaseAgent):
     package = ""
     binary = ""
 
-    def __init__(self, *args, version, local_model=None, **kwargs):
+    def __init__(self, *args, version, local_model=None, local_context=32768, local_output=8192, **kwargs):
         super().__init__(*args, **kwargs)
         self.local_model = local_model
+        self.local_context = local_context
+        self.local_output = local_output
         self.pin = version
         self.detected_version = None
 
@@ -53,19 +55,25 @@ class CommandAgent(BaseAgent):
         prompt.write_text(instruction)
         await environment.upload_file(source_path=prompt, target_path="/tmp/bench-prompt.txt")
         command = shlex.join(self.argv())
-        result = await environment.exec(
-            command=f"cd /workspace && {command} < /tmp/bench-prompt.txt > /logs/agent/native.jsonl 2> /logs/agent/native.stderr",
-            env=self._extra_env,
-        )
+        result = None
         context.metadata = {"usage_status": "unknown", "adapter": type(self).__name__}
-        raw = self.logs_dir / "native.jsonl"
-        await environment.download_file(source_path="/logs/agent/native.jsonl", target_path=raw)
-        usage = parse_usage(raw.read_text(), self.name())
-        for key, value in usage.items():
-            setattr(context, key, value)
-        if usage:
-            context.metadata['usage_status'] = 'reported_by_harness'
-        # Unknown usage stays null. Never estimate missing usage as zero.
+        try:
+            result = await environment.exec(
+                command=f"cd /workspace && {command} < /tmp/bench-prompt.txt > /logs/agent/native.jsonl 2> /logs/agent/native.stderr",
+                env=self._extra_env,
+            )
+        finally:
+            # Retain available counters if the model run is cancelled or fails.
+            try:
+                raw = self.logs_dir / "native.jsonl"
+                await environment.download_file(source_path="/logs/agent/native.jsonl", target_path=raw)
+                usage = parse_usage(raw.read_text(), self.name())
+                for key, value in usage.items():
+                    setattr(context, key, value)
+                if usage:
+                    context.metadata['usage_status'] = 'reported_by_harness'
+            except Exception as error:
+                context.metadata['usage_collection_error'] = type(error).__name__
         if result.return_code != 0:
             raise RuntimeError(f"{self.name()} exited {result.return_code}; see native.stderr")
 
@@ -147,7 +155,8 @@ class Droid(CommandAgent):
             "baseUrl": "http://host.docker.internal:11434/v1",
             "apiKey": "ollama",
             "provider": "generic-chat-completion-api",
-            "maxOutputTokens": 8192,
+            "maxOutputTokens": self.local_output,
+            "maxContextLimit": self.local_context - self.local_output,
             "noImageSupport": True,
             "id": "custom:" + self.local_model + "-0",
             "index": 0,
@@ -160,7 +169,7 @@ class Droid(CommandAgent):
         )
 
     def argv(self):
-        return ["droid", "exec", "--auto", "medium", "--output-format", "json", "--model", self.model_name]
+        return ["droid", "exec", "--auto", "medium", "--output-format", "stream-json", "--model", self.model_name]
 
 
 class DSH(CommandAgent):
@@ -178,13 +187,13 @@ class DSH(CommandAgent):
         (self.logs_dir/'default-config.yml').write_text(result.stdout or '')
 
     async def prepare(self, environment):
-        patch = self.model_patch(self.model_name, local_model=self.local_model)
+        patch = self.model_patch(self.model_name, local_model=self.local_model, context=self.local_context, output=self.local_output)
         path = self.logs_dir / "model.patch.yml"
         path.write_text(json.dumps(patch))
         await environment.upload_file(source_path=path, target_path="/tmp/bench-model.patch.yml")
 
     @staticmethod
-    def model_patch(model_name, *, local_model=None):
+    def model_patch(model_name, *, local_model=None, context=32768, output=8192):
         provider, sep, model = model_name.partition("/")
         if not sep or not model:
             raise ValueError("DSH model must be provider/model")
@@ -201,8 +210,8 @@ class DSH(CommandAgent):
                     'apiKeyEnv': 'BENCH_LOCAL_KEY',
                     'baseURL': 'http://host.docker.internal:11434/v1',
                     'retryPolicy': {'mode': 'normal', 'maxRetries': 0},
-                    'models': [{'id': local_model, 'contextWindow': 32768,
-                                'maxTokens': 8192}],
+                    'models': [{'id': local_model, 'contextWindow': context,
+                                'maxTokens': output}],
                 }}},
             })
             return patch

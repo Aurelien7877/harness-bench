@@ -14,6 +14,8 @@ import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
 
+from scripts.campaign_results import classify
+
 ROOT = Path(__file__).resolve().parent
 HARBOR = ROOT / '.venv/bin/harbor'
 HARBOR_COMMAND = [str(ROOT / '.venv/bin/python'), str(ROOT / 'scripts/harbor_entry.py')]
@@ -78,6 +80,7 @@ def build_plan(suite, harnesses, models, attempts=1, *, local=False):
     cells = [{'harness': h, 'model': models.get(h), 'task': t, 'attempt': k}
              for k in range(attempts) for t in settings['suites'][suite] for h in harnesses]
     random.Random(settings['seed']).shuffle(cells)
+    cells.sort(key=lambda cell: cell['task'] != 'startup')
     paid = sum(c['harness'] not in ('oracle', 'nop') for c in cells)
     if local and any(h not in ('pi', 'opencode', 'droid', 'dsh') for h in harnesses):
         raise ValueError('Local inference supports pi, opencode, droid and dsh')
@@ -106,10 +109,12 @@ def job_config(cell, name, install_only=False, snapshot=None, *, local=False):
         if h == 'dsh':
             agent['env']['DSH_TELEMETRY_DISABLED'] = '1'
     if local:
+        context = settings.get('context_window',32768)
+        output = settings.get('max_output_tokens',8192)
         agent['env'] = {'BENCH_LOCAL_KEY': 'ollama'}
         if h in ('droid', 'dsh'):
             agent['skip_model_parsing'] = True
-            agent['kwargs']['local_model'] = cell['model']
+            agent['kwargs'].update(local_model=cell['model'], local_context=context, local_output=output)
             agent['model_name'] = (
                 'custom:' + cell['model'] + '-0'
                 if h == 'droid' else 'bench-ollama/' + cell['model']
@@ -125,6 +130,16 @@ def job_config(cell, name, install_only=False, snapshot=None, *, local=False):
                 model_api_format='openai_chat_completions',
                 model_api_key_name='BENCH_LOCAL_KEY',
             )
+        if h == 'pi':
+            agent.pop('name',None)
+            agent['import_path'] = 'adapters.local_pi:LocalPi'
+            agent['kwargs'].update(local_context=context, local_output=output)
+        if h == 'opencode':
+            agent['kwargs']['opencode_config'] = {
+                'provider': {'bench-local': {'models': {cell['model']: {
+                    'limit': {'context':context, 'output':output},
+                }}}},
+            }
     return {'job_name': name, 'jobs_dir': str(ROOT / 'runs/jobs'), 'n_attempts': 1,
             'n_concurrent_trials': 1, 'retry': {'max_retries': 0},
             'install_only': install_only, 'skip_credential_checks': install_only,
@@ -178,11 +193,25 @@ def report(campaign):
         if timing.get('started_at') and timing.get('finished_at'):
             elapsed = (datetime.fromisoformat(timing['finished_at']) - datetime.fromisoformat(timing['started_at'])).total_seconds()
         task_meta = tomllib.loads((ROOT/'tasks'/cell['task']/'task.toml').read_text()).get('metadata', {}) if (ROOT/'tasks'/cell['task']/'task.toml').exists() else {}
-        status = error.get('exception_type') or ('installed' if manifest.get('install_only') and result else 'graded' if rewards else 'incomplete')
+        status = classify(result, installed=manifest.get('install_only',False),
+                          started=(ROOT/'runs/jobs'/cell['job']).exists())
+        criteria = {}
+        if files:
+            diagnostic = files[0].parent/'verifier/criteria.json'
+            if diagnostic.exists():
+                criteria = json.loads(diagnostic.read_text()).get('checks',{})
+        script = None
+        if files:
+            workspace = files[0].parent/'artifacts/workspace'
+            if workspace.exists():
+                script = (workspace/'analyze.py').is_file()
         rows.append({**{k:cell[k] for k in ('harness','model','task','attempt')},
                      'category': task_meta.get('category'), 'version': (result.get('agent_info') or {}).get('version'),
                      'agent_seconds': elapsed,
-                     'status': status,
+                     'status': status, 'error_type':error.get('exception_type'),
+                     'error_message':error.get('exception_message'),
+                     'script_present':script, 'criteria_json':json.dumps(criteria),
+                     'logs':str(files[0].parent) if files else '',
                      'reward': rewards.get('reward'),
                      'cost_usd': usage.get('cost_usd'), 'input_tokens': usage.get('n_input_tokens'),
                      'cached_input_tokens': usage.get('n_cache_tokens'), 'output_tokens': usage.get('n_output_tokens'),
@@ -200,18 +229,30 @@ def report(campaign):
         group = [r for r in rows if r['harness']==h]
         costs = [r['cost_usd'] for r in group if r['cost_usd'] is not None]
         cost_text = f'{sum(costs):.4f}' if costs else 'unknown'
-        lines.append(f'| {h} | {sum(r["reward"]==1 and r["status"]=="graded" for r in group)}/{len(group)} | {sum(r["status"]=="graded" for r in group)} | {sum(r["status"]!="graded" for r in group)} | {cost_text} | {sum(r["cost_usd"] is None for r in group)} |')
+        lines.append(f'| {h} | {sum(r["reward"]==1 and r["status"] in ("passed","incorrect") for r in group)}/{len(group)} | {sum(r["status"] in ("passed","incorrect") for r in group)} | {sum(r["status"] not in ("passed","incorrect") for r in group)} | {cost_text} | {sum(r["cost_usd"] is None for r in group)} |')
     lines += ['', '| Harness | Category | Passed / scheduled |', '|---|---|---:|']
     for h, category in sorted({(r['harness'],r['category'] or 'unknown') for r in rows}):
         group = [r for r in rows if r['harness']==h and (r['category'] or 'unknown')==category]
-        lines.append(f'| {h} | {category} | {sum(r["reward"]==1 and r["status"]=="graded" for r in group)}/{len(group)} |')
+        lines.append(f'| {h} | {category} | {sum(r["reward"]==1 and r["status"] in ("passed","incorrect") for r in group)}/{len(group)} |')
+    lines += ['', '| Harness | Passed | Incorrect | Timeout | Technical error | Not run / incomplete |',
+              '|---|---:|---:|---:|---:|---:|']
+    for h in sorted({r['harness'] for r in rows}):
+        group = [r for r in rows if r['harness']==h]
+        counts = {status:sum(r['status']==status for r in group)
+                  for status in ('passed','incorrect','timeout','technical_error','not_run','incomplete')}
+        rates = [f"{100*counts[k]/len(group):.0f}%" for k in ('passed','incorrect','timeout','technical_error')]
+        rates.append(f"{100*(counts['not_run']+counts['incomplete'])/len(group):.0f}%")
+        lines.append('| '+h+' | '+' | '.join(rates)+' |')
     lines += ['', 'Small screening sample only. Do not infer a universal winner. Compare matched model configurations separately from native product configurations.']
     (campaign / 'report.md').write_text('\n'.join(lines)+'\n')
     return rows
 
 
-def execute(plan, provider_cap=None, install_only=False, progress=None):
+def execute(plan, provider_cap=None, install_only=False, progress=None, settings_override=None):
     settings, registry = read_config()
+    settings.update(settings_override or {})
+    if settings['timeout_sec'] <= 0 or not 0 < settings['max_output_tokens'] < settings['context_window']:
+        raise ValueError('Use a positive timeout and output tokens below the context window.')
     paid = plan['reserved_eur'] > 0 and not install_only
     if paid:
         if provider_cap is None or not 0 < provider_cap <= settings['budget_eur']:
@@ -236,6 +277,13 @@ def execute(plan, provider_cap=None, install_only=False, progress=None):
         if not record or not record.get('size') or record.get('remote_host') or 'cloud' in tag.lower():
             raise ValueError(f'Pull a local Ollama model first: ollama pull {tag}')
         plan['ollama_digest'] = record['digest']
+        plan['ollama_runtime'] = {}
+        for endpoint in ('version','ps'):
+            try:
+                with urllib.request.urlopen('http://127.0.0.1:11434/api/'+endpoint,timeout=5) as response:
+                    plan['ollama_runtime'][endpoint] = json.load(response)
+            except OSError:
+                plan['ollama_runtime'][endpoint] = None
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
     campaign = ROOT / 'runs/campaigns' / stamp
     campaign.mkdir(parents=True)
@@ -255,6 +303,7 @@ def execute(plan, provider_cap=None, install_only=False, progress=None):
     if progress:
         progress('campaign', {'path': campaign, 'total': len(manifest['cells'])})
     static_bytes = initial_bytes - folder_bytes(ROOT/'runs')
+    manifest['state'] = 'running'
     try:
         for cell in manifest['cells']:
             for relative, digest in manifest['task_file_hashes'].items():
@@ -273,6 +322,23 @@ def execute(plan, provider_cap=None, install_only=False, progress=None):
                     while process.poll() is None:
                         if (static_bytes + folder_bytes(ROOT/'runs'))/1e9 >= settings['stop_folder_gb']:
                             raise RuntimeError('Storage guard reached; stopping campaign')
+                        if progress:
+                            native = list((ROOT/'runs/jobs'/cell['job']).glob('*/agent/*.jsonl'))
+                            native += list((ROOT/'runs/jobs'/cell['job']).glob('*/agent/*.txt'))
+                            active = [p for p in native if p.stat().st_size]
+                            idle = min((time.time()-p.stat().st_mtime for p in active), default=None)
+                            event = None
+                            if active:
+                                last = max(active,key=lambda p:p.stat().st_mtime)
+                                with last.open('rb') as stream:
+                                    stream.seek(max(0,last.stat().st_size-4096))
+                                    for line in reversed(stream.read().decode(errors='replace').splitlines()):
+                                        try:
+                                            event = json.loads(line).get('type')
+                                            break
+                                        except (ValueError,AttributeError):
+                                            continue
+                            progress('heartbeat', dict(cell,idle_seconds=idle,last_event=event))
                         time.sleep(2)
                 except BaseException:
                     os.killpg(process.pid, signal.SIGINT)
@@ -284,17 +350,31 @@ def execute(plan, provider_cap=None, install_only=False, progress=None):
                     raise
             latest = list((ROOT/'runs/jobs'/cell['job']).glob('*/result.json'))
             result = json.loads(latest[0].read_text()) if latest else {}
+            if plan.get('local'):
+                try:
+                    with urllib.request.urlopen('http://127.0.0.1:11434/api/ps',timeout=5) as response:
+                        cell['ollama_runtime_after'] = json.load(response)
+                except OSError:
+                    cell['ollama_runtime_after'] = None
+            manifest_path = campaign/'manifest.json'
+            temporary = manifest_path.with_suffix('.tmp')
+            temporary.write_text(json.dumps(manifest,indent=2))
+            temporary.replace(manifest_path)
             if progress:
                 progress('trial_end', dict(cell, result=result, returncode=process.returncode))
-            if process.returncode:
+            if process.returncode and not plan.get('local'):
                 raise RuntimeError(f'Harbor failed; see {log.name}')
             latest = list((ROOT/'runs/jobs'/cell['job']).glob('*/result.json'))
             error = json.loads(latest[0].read_text()).get('exception_info') if latest else None
-            if plan.get('local') and error and error.get('exception_type') == 'AgentTimeoutError':
+            if plan.get('local'):
                 continue
             if not latest or error:
                 raise RuntimeError('Trial infrastructure/agent error; campaign stopped to avoid wasting money')
     finally:
+        manifest['state'] = 'interrupted' if sys.exc_info()[0] else 'finished'
+        temporary = (campaign/'manifest.json').with_suffix('.tmp')
+        temporary.write_text(json.dumps(manifest,indent=2))
+        temporary.replace(campaign/'manifest.json')
         rows = report(campaign)
         print(f'Report: {campaign / "report.md"}')
     return 0

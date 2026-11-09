@@ -156,6 +156,18 @@ with open(sys.argv[2],'w') as f: json.dump(out,f)
     history += "".join(f"Log {i}: background batch completed; no preference changes.\n" for i in range(200))
     history += "2026-10-01: Preferred region now US. Budget unchanged.\n2026-11-01: The earlier budget revision remains valid. Do not infer a new budget.\n"
     json_task("context-revisions", "context", "Recover the current preferences from history.txt, using explicit revisions. Return budget_eur, region, budget_source_date. This tests file-based context retrieval, not cross-session memory or compaction.", {"history.txt": history}, {"budget_eur": 700, "region": "US", "budget_source_date": "2026-02-01"})
+    pipeline_task(
+        'startup', 'startup',
+        'Read a JSON array of numbers. Write a reusable script that returns count and sum.',
+        'numbers.json', '[2, 3, 5]', '[-1, 0, 4, 4]',
+        "import json, sys\nfrom pathlib import Path\nnumbers=json.loads(Path(sys.argv[1]).read_text())\nPath(sys.argv[2]).write_text(json.dumps({'count':len(numbers),'sum':sum(numbers)}))\n",
+        "assert evaluate(PUBLIC)=={'count':3,'sum':10}\nassert evaluate(HIDDEN)=={'count':4,'sum':7}\n",
+    )
+    retrieval = TASKS/'ds-retrieval'
+    instruction = (retrieval/'instruction.md').read_text()
+    instruction += "\nMRR definition: for each query, take 1 divided by the one-based rank of the FIRST relevant result among the first three, or zero if absent. Average these values across queries. MRR must be between 0 and 1.\n"
+    write(retrieval/'instruction.md', instruction)
+    write(retrieval/'tests/check.py', (ROOT/'scripts/templates/retrieval_check.py').read_text())
     print(f"Prepared {len(list(TASKS.iterdir()))} Harbor tasks")
 
 
