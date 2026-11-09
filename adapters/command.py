@@ -13,8 +13,9 @@ class CommandAgent(BaseAgent):
     package = ""
     binary = ""
 
-    def __init__(self, *args, version, **kwargs):
+    def __init__(self, *args, version, local_model=None, **kwargs):
         super().__init__(*args, **kwargs)
+        self.local_model = local_model
         self.pin = version
         self.detected_version = None
 
@@ -137,6 +138,27 @@ class Droid(CommandAgent):
     def name():
         return "droid"
 
+    async def prepare(self, environment):
+        if not self.local_model:
+            return
+        settings = {"customModels": [{
+            "model": self.local_model,
+            "displayName": "Local Ollama",
+            "baseUrl": "http://host.docker.internal:11434/v1",
+            "apiKey": "ollama",
+            "provider": "generic-chat-completion-api",
+            "maxOutputTokens": 8192,
+            "noImageSupport": True,
+            "id": "custom:" + self.local_model + "-0",
+            "index": 0,
+        }]}
+        path = self.logs_dir / "factory-settings.json"
+        path.write_text(json.dumps(settings, indent=2))
+        await self.checked(environment, 'mkdir -p ~/.factory')
+        await environment.upload_file(
+            source_path=path, target_path="/root/.factory/settings.json"
+        )
+
     def argv(self):
         return ["droid", "exec", "--auto", "medium", "--output-format", "json", "--model", self.model_name]
 
@@ -156,19 +178,34 @@ class DSH(CommandAgent):
         (self.logs_dir/'default-config.yml').write_text(result.stdout or '')
 
     async def prepare(self, environment):
-        patch = self.model_patch(self.model_name)
+        patch = self.model_patch(self.model_name, local_model=self.local_model)
         path = self.logs_dir / "model.patch.yml"
         path.write_text(json.dumps(patch))
         await environment.upload_file(source_path=path, target_path="/tmp/bench-model.patch.yml")
 
     @staticmethod
-    def model_patch(model_name):
+    def model_patch(model_name, *, local_model=None):
         provider, sep, model = model_name.partition("/")
         if not sep or not model:
             raise ValueError("DSH model must be provider/model")
         if provider == 'deepseek':
             provider = 'deepseek-official'
         patch = [{"id": "agent-default-model", "config": {"provider": provider, "model": model}}]
+        if local_model:
+            if provider != 'bench-ollama' or model != local_model:
+                raise ValueError('Local DSH model and provider route must match')
+            patch.append({
+                'id': 'llm-pi-ai',
+                'config': {'providers': {'bench-ollama': {
+                    'api': 'openai-completions',
+                    'apiKeyEnv': 'BENCH_LOCAL_KEY',
+                    'baseURL': 'http://host.docker.internal:11434/v1',
+                    'retryPolicy': {'mode': 'normal', 'maxRetries': 0},
+                    'models': [{'id': local_model, 'contextWindow': 32768,
+                                'maxTokens': 8192}],
+                }}},
+            })
+            return patch
         if provider != 'deepseek-official':
             keys = {'anthropic':'ANTHROPIC_API_KEY', 'openai':'OPENAI_API_KEY'}
             if provider not in keys:

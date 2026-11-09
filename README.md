@@ -49,6 +49,15 @@ Pick `demo` for **1 task**, `smoke` for **2**, `quick` for **5** or `full` for *
 python3 scripts/local_comparison.py --suite quick --attempts 2
 ```
 
+You can include Droid and DeepSeek Harness in the notebook:
+
+```python
+model = "lfm3:1.7b"
+harnesses = ["pi", "opencode", "droid", "dsh"]
+```
+
+Pull the repository updates before using these names. The local routes for Droid 1.6.0 and DeepSeek Harness 0.2.2-rc.1 use Ollama's Chat Completions endpoint. They have configuration checks, with model-driven execution still awaiting validation. Droid may request Factory authentication depending on its CLI and account requirements. The pinned versions live in the registry so each experiment records a specific version.
+
 ## Read the results
 
 Open the `report.md` path printed when the campaign finishes. Use `results.csv` to compare the same task and attempt across harnesses. It includes the grade, status, agent time and available token counts. Blank usage fields mean the harness did not report that value. The manifest records the task hashes, model digest for Ollama runs, and configuration used for the campaign.
@@ -61,7 +70,8 @@ If one agent passes and another fails, open both workspaces. Check whether the f
 |---|---|---|
 | Pi and OpenCode | [Harbor](https://github.com/harbor-framework/harbor) adapters | Ollama and hosted models |
 | Claude Code and Codex | Harbor adapters | Hosted models |
-| Oh My Pi (OMP), Factory Droid and DeepSeek Harness | [CLI adapters](adapters/command.py) | Hosted configurations |
+| Factory Droid and DeepSeek Harness | [CLI adapters](adapters/command.py) | Ollama configuration added, execution pending validation |
+| Oh My Pi (OMP) | CLI adapter | Hosted configurations |
 
 See the [harness registry](config/harnesses.toml) for exact versions and credential names. You can check a CLI installation with `./bench install-check --harness droid`.
 

@@ -79,8 +79,8 @@ def build_plan(suite, harnesses, models, attempts=1, *, local=False):
              for k in range(attempts) for t in settings['suites'][suite] for h in harnesses]
     random.Random(settings['seed']).shuffle(cells)
     paid = sum(c['harness'] not in ('oracle', 'nop') for c in cells)
-    if local and any(h not in ('pi', 'opencode') for h in harnesses):
-        raise ValueError('Local inference supports pi and opencode')
+    if local and any(h not in ('pi', 'opencode', 'droid', 'dsh') for h in harnesses):
+        raise ValueError('Local inference supports pi, opencode, droid and dsh')
     reserved = 0 if local else paid * settings['reserve_eur_per_trial']
     if reserved > settings['budget_eur']:
         raise ValueError(f'{len(cells)} runs reserve EUR {reserved:.2f}, above EUR {settings["budget_eur"]:.2f}; reduce tasks/harnesses/attempts')
@@ -106,13 +106,25 @@ def job_config(cell, name, install_only=False, snapshot=None, *, local=False):
         if h == 'dsh':
             agent['env']['DSH_TELEMETRY_DISABLED'] = '1'
     if local:
-        provider = 'bench-local' if h == 'opencode' else 'openai'
-        agent.update(model_name=provider + '/' + cell['model'],
-                     skip_model_parsing=(h == 'opencode'),
-                     base_url='http://host.docker.internal:11434/v1',
-                     model_api_format='openai_chat_completions',
-                     model_api_key_name='BENCH_LOCAL_KEY',
-                     env={'BENCH_LOCAL_KEY': 'ollama'})
+        agent['env'] = {'BENCH_LOCAL_KEY': 'ollama'}
+        if h in ('droid', 'dsh'):
+            agent['skip_model_parsing'] = True
+            agent['kwargs']['local_model'] = cell['model']
+            agent['model_name'] = (
+                'custom:' + cell['model'] + '-0'
+                if h == 'droid' else 'bench-ollama/' + cell['model']
+            )
+            if h == 'dsh':
+                agent['env']['DSH_TELEMETRY_DISABLED'] = '1'
+        else:
+            provider = 'bench-local' if h == 'opencode' else 'openai'
+            agent.update(
+                model_name=provider + '/' + cell['model'],
+                skip_model_parsing=(h == 'opencode'),
+                base_url='http://host.docker.internal:11434/v1',
+                model_api_format='openai_chat_completions',
+                model_api_key_name='BENCH_LOCAL_KEY',
+            )
     return {'job_name': name, 'jobs_dir': str(ROOT / 'runs/jobs'), 'n_attempts': 1,
             'n_concurrent_trials': 1, 'retry': {'max_retries': 0},
             'install_only': install_only, 'skip_credential_checks': install_only,

@@ -100,4 +100,4 @@ def test_local_pair_uses_same_weights_and_no_provider_credential(monkeypatch):
             assert agent['model_name'].startswith('bench-local/')
             assert agent['skip_model_parsing']
     with pytest.raises(ValueError, match='Local inference'):
-        bench.build_plan('demo', ['droid'], {'droid': 'qwen3:4b'}, local=True)
+        bench.build_plan('demo', ['claude'], {'claude': 'qwen3:4b'}, local=True)

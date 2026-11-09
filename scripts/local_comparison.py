@@ -35,7 +35,7 @@ def read_results(campaign):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", default="lfm3:1.7b")
-    parser.add_argument("--harness", action="append", choices=["pi", "opencode"])
+    parser.add_argument("--harness", action="append", choices=["pi", "opencode", "droid", "dsh"])
     parser.add_argument("--suite", choices=["demo", "smoke", "quick", "full"], default="demo")
     parser.add_argument("--attempts", type=int, default=1)
     mode = parser.add_mutually_exclusive_group()
