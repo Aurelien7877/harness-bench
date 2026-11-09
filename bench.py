@@ -294,7 +294,7 @@ def main():
     p = sub.add_parser('local', help='Compare harnesses using a model installed in Ollama')
     p.add_argument('--suite', default='demo')
     p.add_argument('--harness', action='append')
-    p.add_argument('--model', default='qwen3:4b')
+    p.add_argument('--model', default='lfm3:1.7b')
     p.add_argument('--attempts', type=int, default=1)
     p = sub.add_parser('report'); p.add_argument('campaign', type=Path)
     args = parser.parse_args()

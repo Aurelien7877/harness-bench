@@ -1,6 +1,6 @@
 # Harness Bench
 
-![Harness Bench: Pi and OpenCode share a task and Ollama model, then a common grader checks their outputs](assets/harness-bench.svg)
+![Abstract violet, blue and mint waves made from tiny ASCII characters](assets/harness-bench.svg)
 
 [![Local inference with Ollama](https://img.shields.io/badge/local_inference-Ollama-16765f?style=flat-square)](#try-the-local-demo)
 [![Open the Python notebook](https://img.shields.io/badge/Jupyter-open_notebook-b54f20?style=flat-square)](notebooks/local-comparison.ipynb)
@@ -21,11 +21,11 @@ You need [uv](https://docs.astral.sh/uv/getting-started/installation/), Docker w
 git clone https://github.com/Aurelien7877/harness-bench.git
 cd harness-bench
 make setup
-ollama pull qwen3:4b
+ollama pull lfm3:1.7b
 python3 scripts/local_comparison.py
 ```
 
-The last line **previews the command**. When you are ready to run one task with both harnesses, use `./bench local`. The [Qwen3 4B weights](https://ollama.com/library/qwen3:4b) occupy about 2.5 GB in Ollama’s model store. Each agent gets a fresh Docker container with its pinned CLI.
+The last line **previews the command**. When you are ready to run one task with both harnesses, use `./bench local`. The [LFM3 1.7B weights](https://ollama.com/library/lfm3:1.7b) occupy about 1.1–1.7 GB in Ollama’s model store. Each agent gets a fresh Docker container with its pinned CLI. LFM3 is intended for small local agents and structured tool use. Its model card cautions against complex agentic coding, so start with the short tasks and inspect any failures.
 
 **Prefer Jupyter?** Open the [comparison notebook](notebooks/local-comparison.ipynb), choose a model and a task suite, then select **Run All**. The notebook prints the terminal command and reads any results you have already saved. The [companion script](scripts/local_comparison.py) also accepts `--run` when you want to start inference.
 
