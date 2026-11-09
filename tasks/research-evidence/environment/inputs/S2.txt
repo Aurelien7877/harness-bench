@@ -1,0 +1,2 @@
+S2 | Official correction | 2026-10-01
+Supersedes S1. Aster maximum RAM is 32 GB. Price remains 800 EUR.

@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+cd "$ROOT"
+export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
+export UV_CACHE_DIR="$ROOT/.cache/uv"
+export HF_HOME="$ROOT/.cache/huggingface"
+export LITELLM_LOCAL_MODEL_COST_MAP=True
+exec "$ROOT/.venv/bin/python" "$ROOT/bench.py" "$@"

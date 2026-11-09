@@ -1,0 +1,43 @@
+# Edit versions here, then run `bench validate` and a free install check.
+# Model strings are explicit per campaign; no model is selected silently.
+[pi]
+agent = "pi"
+version = "1.0.4"
+credential_env = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "DEEPSEEK_API_KEY", "OPENROUTER_API_KEY"]
+status = "upstream Harbor adapter"
+
+[claude]
+agent = "claude-code"
+version = "2.1.306"
+credential_env = ["ANTHROPIC_API_KEY"]
+status = "upstream Harbor adapter"
+
+[codex]
+agent = "codex"
+version = "0.163.0"
+credential_env = ["OPENAI_API_KEY"]
+status = "upstream Harbor adapter"
+
+[opencode]
+agent = "opencode"
+version = "1.19.5"
+credential_env = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "DEEPSEEK_API_KEY", "OPENROUTER_API_KEY"]
+status = "upstream Harbor adapter; npm stable v1, not the separately documented v2"
+
+[omp]
+import_path = "adapters.command:OMP"
+version = "18.16.0"
+credential_env = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "DEEPSEEK_API_KEY", "OPENROUTER_API_KEY"]
+status = "local thin adapter; paid execution not yet tested"
+
+[droid]
+import_path = "adapters.command:Droid"
+version = "1.3.0"
+credential_env = ["FACTORY_API_KEY"]
+status = "local thin adapter; paid execution not yet tested"
+
+[dsh]
+import_path = "adapters.command:DSH"
+version = "0.2.2-alpha.3"
+credential_env = ["DEEPSEEK_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"]
+status = "local thin adapter; paid execution not yet tested"

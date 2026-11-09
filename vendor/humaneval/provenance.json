@@ -1,0 +1,11 @@
+{
+  "source": "https://github.com/openai/human-eval",
+  "downloaded": "2026-11-04",
+  "archive_sha256": "b796127e635a67f93fb35c04f4cb03cf06f38c8072ee7cee8833d7bee06979ef",
+  "ids": [
+    "HumanEval/0",
+    "HumanEval/12"
+  ],
+  "license": "MIT",
+  "adaptation": "File-based agent task. Original tests and canonical solution retained. Not an official HumanEval score."
+}

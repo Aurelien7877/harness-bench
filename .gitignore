@@ -1,0 +1,11 @@
+.venv/
+.cache/
+.home/
+.env
+runs/
+__pycache__/
+.pytest_cache/
+*.pyc
+.DS_Store
+.env.*
+INSTALLATION.md

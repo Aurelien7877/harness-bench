@@ -1,0 +1,2 @@
+S1 | Official specification | 2026-01-01
+Aster supports 64 GB RAM; price 800 EUR excluding delivery.

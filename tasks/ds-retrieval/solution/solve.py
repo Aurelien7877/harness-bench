@@ -1,0 +1,4 @@
+from pathlib import Path
+import subprocess
+Path('analyze.py').write_text("import json, sys\nwith open(sys.argv[1]) as f: queries=json.load(f)\nout={}\nfor system in ('a','b'):\n    recalls=[]; reciprocals=[]\n    for query in queries:\n        relevant=set(query['relevant']); ranked=query[system][:3]\n        recalls.append(len(set(ranked)&relevant)/len(relevant))\n        reciprocals.append(next((1/(i+1) for i,x in enumerate(ranked) if x in relevant),0))\n    out['recall_'+system]=round(sum(recalls)/len(queries),6)\n    out['mrr_'+system]=round(sum(reciprocals)/len(queries),6)\nav=(out['recall_a'],out['mrr_a']); bv=(out['recall_b'],out['mrr_b'])\nout['winner']='a' if av>bv else 'b' if bv>av else 'tie'\nwith open(sys.argv[2],'w') as f: json.dump(out,f)\n")
+subprocess.run(['python3','analyze.py','rankings.json','answer.json'],check=True)

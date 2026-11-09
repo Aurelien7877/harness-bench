@@ -1,0 +1,12 @@
+# Merge one table like this into harnesses.toml, replacing the placeholders.
+# For a built-in Harbor adapter, no Python implementation is needed.
+[new-harness]
+agent = "UPSTREAM_HARBOR_AGENT_NAME"
+version = "EXACT_PUBLISHED_VERSION"
+credential_env = ["PROVIDER_API_KEY"]
+status = "not yet install-checked"
+
+# For a custom adapter, replace `agent` with:
+# import_path = "adapters.my_agent:MyAgent"
+# Inherit CommandAgent and implement package, binary, name(), argv().
+# Override prepare() only if model selection needs a config file.

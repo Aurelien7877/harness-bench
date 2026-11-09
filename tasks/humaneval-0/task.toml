@@ -1,0 +1,15 @@
+schema_version = "1.4"
+[metadata]
+category = "coding"
+author_name = "Personal harness benchmark"
+difficulty = "easy"
+source = "openai/human-eval HumanEval/0; MIT"
+[agent]
+timeout_sec = 180
+[verifier]
+timeout_sec = 30
+[environment]
+build_timeout_sec = 300
+cpus = 2
+memory_mb = 2048
+workdir = "/workspace"

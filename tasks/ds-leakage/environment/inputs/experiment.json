@@ -1,0 +1,1 @@
+{"features": {"age": "available at month start", "tenure_months": "available at month start", "cancellation_reason": "recorded after customer cancels", "days_until_churn": "computed from future label"}, "rows": "multiple monthly observations per customer", "split": "random rows", "scaler_fit": "all rows", "reported_accuracy": 0.99}
