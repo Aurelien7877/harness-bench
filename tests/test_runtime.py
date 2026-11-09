@@ -82,3 +82,32 @@ def test_stale_runtime_is_rejected_before_any_campaign(monkeypatch):
     monkeypatch.setattr(bench.importlib.metadata,'version',lambda name:'outdated')
     with pytest.raises(ValueError,match='make setup-python'):
         bench.runtime_versions()
+
+
+def test_notebook_updates_stale_dependencies_before_docker_setup(tmp_path, monkeypatch):
+    import importlib.util
+    import sys
+    import urllib.request
+    notebook = json.loads((bench.ROOT/'notebooks/local-comparison.ipynb').read_text())
+    preparation = next(''.join(c['source']) for c in notebook['cells']
+                       if c['cell_type']=='code' and 'docker", "info' in ''.join(c['source']))
+    calls = []
+    checks = []
+    def versions():
+        checks.append(True)
+        if len(checks)==1:
+            raise ValueError('stale')
+        return {}
+    monkeypatch.setattr(importlib.util,'find_spec',lambda name:SimpleNamespace())
+    monkeypatch.setattr(shutil,'which',lambda name:'uv')
+    def fake_run(command,**kwargs):
+        calls.append(command)
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(bench.subprocess,'run',fake_run)
+    monkeypatch.setattr(urllib.request,'urlopen',lambda *a,**k:io.BytesIO(b'{"models":[{"name":"fixture"}]}'))
+    exec(compile(preparation,'notebook preparation','exec'),
+         dict(run_new_campaign=True,bench=SimpleNamespace(runtime_versions=versions),
+              root=tmp_path,model='fixture',sys=sys))
+    assert len(checks)==2
+    assert calls[0][-2:]==['-r',str(tmp_path/'requirements.lock')]
+    assert calls[1]==['docker','info']

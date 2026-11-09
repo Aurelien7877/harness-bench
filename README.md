@@ -61,7 +61,7 @@ harnesses = ["pi", "opencode", "droid", "dsh"]
 
 The local routes for Droid 1.6.0 and DeepSeek Harness 0.2.2-rc.1 use Ollama's Chat Completions endpoint. They have configuration and unit checks. This repository does not claim successful model execution for every adapter, CLI or model combination. Droid may request Factory authentication depending on its CLI and account requirements. The pinned versions live in the registry so each experiment records a specific version.
 
-After a repository update, use `make setup-python` to synchronize the execution dependencies. This does not build images or run a model. Existing reports remain readable; new campaigns reject stale execution libraries.
+The notebook preparation cell refreshes stale execution dependencies before a new campaign. For terminal use after a repository update, `make setup-python` synchronizes those dependencies without building images or running a model. Existing reports remain readable; the launcher rejects stale execution libraries.
 
 ## Read the results
 
