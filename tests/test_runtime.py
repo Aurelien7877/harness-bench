@@ -49,6 +49,7 @@ def test_report_survives_corrupt_partial_result(tmp_path, monkeypatch):
 def test_local_launcher_error_is_recorded_without_stopping_remaining_cells(tmp_path, monkeypatch):
     source = bench.ROOT
     shutil.copytree(source/'config',tmp_path/'config')
+    shutil.copy(source/'requirements.lock',tmp_path/'requirements.lock')
     shutil.copytree(source/'tasks/startup',tmp_path/'tasks/startup')
     monkeypatch.setattr(bench,'ROOT',tmp_path)
     plan = bench.build_plan('demo',['pi'],{'pi':'test-local'},local=True)
@@ -75,3 +76,9 @@ def test_local_launcher_error_is_recorded_without_stopping_remaining_cells(tmp_p
     assert manifest['state'] == 'finished'
     assert all(c['returncode']==17 and c['started_at'] for c in manifest['cells'])
     assert all(row['status']=='technical_error' for row in bench.report(campaign))
+
+
+def test_stale_runtime_is_rejected_before_any_campaign(monkeypatch):
+    monkeypatch.setattr(bench.importlib.metadata,'version',lambda name:'outdated')
+    with pytest.raises(ValueError,match='make setup-python'):
+        bench.runtime_versions()

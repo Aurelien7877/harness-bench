@@ -62,7 +62,7 @@ adversarial competition or a defense against test tampering.
 ## Reproducibility
 
 Each campaign stores CLI version information when available, task file hashes,
-configuration snapshots and the Ollama digest. Trials stop if task files change
+configuration snapshots, key Python library versions and the Ollama digest. Trials stop if task files change
 mid-campaign. Old campaigns retain their original grading. Do not pool results
 across task revisions or assume that a newer grader retroactively applies to
 saved outputs. Keep private runs and generated files out of commits.

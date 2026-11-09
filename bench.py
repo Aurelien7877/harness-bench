@@ -26,6 +26,21 @@ def read_config():
     return tuple(tomllib.loads((ROOT / 'config' / f'{name}.toml').read_text()) for name in ('bench', 'harnesses'))
 
 
+def runtime_versions():
+    """Reject stale execution libraries before starting containers or inference."""
+    pins = dict(line.split('==',1) for line in (ROOT/'requirements.lock').read_text().splitlines()
+                if '==' in line and not line.startswith('#'))
+    versions = {}
+    for name in ('harbor','litellm','filelock'):
+        try:
+            versions[name] = importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
+            versions[name] = None
+        if versions[name] != pins[name]:
+            raise ValueError('Python execution dependencies are out of date. Run make setup-python before starting a campaign.')
+    return versions
+
+
 def folder_bytes(directory=ROOT):
     size = 0
     for parent, _, names in os.walk(directory):
@@ -315,6 +330,7 @@ def execute(plan, provider_cap=None, install_only=False, progress=None, settings
             if h == 'dsh':
                 from adapters.command import DSH
                 DSH.model_patch(cell['model'])
+    versions = runtime_versions()
     initial_bytes = folder_bytes()
     if initial_bytes/1e9 >= settings['stop_folder_gb']:
         raise ValueError('Folder near storage limit; archive your runs before continuing')
@@ -338,7 +354,7 @@ def execute(plan, provider_cap=None, install_only=False, progress=None, settings
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
     campaign = ROOT / 'runs/campaigns' / stamp
     campaign.mkdir(parents=True)
-    manifest = dict(copy.deepcopy(plan), state='running', harbor_version=importlib.metadata.version('harbor'), provider_cap_attested_eur=provider_cap, install_only=install_only)
+    manifest = dict(copy.deepcopy(plan), state='running', harbor_version=versions['harbor'], runtime_versions=versions, provider_cap_attested_eur=provider_cap, install_only=install_only)
     manifest['configuration_snapshot'] = {'settings':settings, 'harnesses':registry}
     manifest['task_file_hashes'] = {
         str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()
