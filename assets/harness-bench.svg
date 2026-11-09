@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 372" role="img" aria-labelledby="title desc">
-<title id="title">Harness Bench ASCII waves</title>
+<title id="title">Harness Bench — A very small benchmark to find the harness you need.</title>
 <desc id="desc">Tiny ASCII marks form flowing violet, blue and mint waves.</desc>
 <defs><clipPath id="corners"><rect width="1200" height="372" rx="16"/></clipPath></defs>
 <g clip-path="url(#corners)"><rect width="1200" height="372" fill="#f2f0ff"/>

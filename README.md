@@ -1,5 +1,7 @@
 # Harness Bench
 
+**A very small benchmark to find the harness you need.**
+
 ![Abstract violet, blue and mint waves made from tiny ASCII characters](assets/harness-bench.svg)
 
 [![Local inference with Ollama](https://img.shields.io/badge/local_inference-Ollama-16765f?style=flat-square)](#try-the-local-demo)
@@ -7,7 +9,9 @@
 [![Seven harness configurations](https://img.shields.io/badge/harnesses-7-514d9b?style=flat-square)](config/harnesses.toml)
 [![Eight graded tasks](https://img.shields.io/badge/graded_tasks-8-275f85?style=flat-square)](#inside-the-benchmark)
 
-**A small benchmark for comparing AI coding agents on data science, research and everyday work.** Give Pi and OpenCode the same local model, the same input files and the same time limit. See which agent writes a working solution, how long it takes and where it gets stuck.
+Choosing an AI agent harness? Start with a few tasks you care about. Compare how agents handle Python, data science, research and everyday work, then inspect their outputs, runtime and failures to decide what fits your workflow.
+
+Eight tasks, a Python notebook and a local Ollama demo get you started. Pi and OpenCode receive the same model, input files and time limit. Add another harness or bring your own tasks as your needs change.
 
 The first experiment asks each harness to evaluate two search systems. Both agents see one set of rankings. The grader runs each agent’s Python program on a second set and checks its recall and reciprocal rank. You can inspect the programs alongside the scores.
 
