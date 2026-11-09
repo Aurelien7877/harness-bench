@@ -1,2 +1,4 @@
 from pathlib import Path
-Path('answer.json').write_text('{"balances": {"i1": 0, "i2": 3000, "i3": 0}, "unapplied_credit": {"A": 0, "B": 2000}, "duplicate_payments": 1}')
+import subprocess
+Path('analyze.py').write_text("import json, sys\nfrom pathlib import Path\nledger=json.loads(Path(sys.argv[1]).read_text())\ncustomers={i['customer'] for i in ledger['invoices']}|{p['customer'] for p in ledger['payments']}\ncredit=dict.fromkeys(customers,0); seen=set(); duplicates=0\nfor payment in ledger['payments']:\n    if payment['payment_id'] in seen:\n        duplicates+=1; continue\n    seen.add(payment['payment_id'])\n    credit[payment['customer']]+=payment['amount']\nbalances={}\nfor invoice in sorted(ledger['invoices'],key=lambda i:(i['date'],i['id'])):\n    customer=invoice['customer']; applied=min(credit[customer],invoice['amount'])\n    credit[customer]-=applied; balances[invoice['id']]=invoice['amount']-applied\nPath(sys.argv[2]).write_text(json.dumps({'balances':balances,'unapplied_credit':credit,'duplicate_payments':duplicates}))\n")
+subprocess.run(['python3','analyze.py','ledger.json','answer.json'],check=True)

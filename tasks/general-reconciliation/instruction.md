@@ -1,4 +1,4 @@
-Apply payments to invoices oldest first, within each customer only. Deduplicate payments by payment_id, keeping first. Amounts are integer cents. Report remaining invoice balances as balances, unapplied_credit by customer, duplicate_payments count. Read ledger.json.
-Write answer.json with these fields and types:
-{"balances": "dict", "unapplied_credit": "dict", "duplicate_payments": "int"}
+Read ledger.json. Amounts are non-negative integer cents. Deduplicate payments globally by payment_id, keeping the first occurrence even if a duplicate names another customer. Sum retained payments within each customer. Apply available credit to that customer’s invoices from oldest date to newest; break same-date ties by invoice id alphabetically. Invoice ids are unique. Return balances for EVERY invoice, unapplied_credit for EVERY customer mentioned in either input list (including zero), and duplicate_payments as the number of discarded payment rows. Never transfer credit between customers.
+Output exactly these fields (JSON object order does not matter): {"balances": "object", "unapplied_credit": "object", "duplicate_payments": "number"}
+Write analyze.py accepting INPUT_PATH OUTPUT_JSON_PATH. Run it on ledger.json and save answer.json. The verifier checks that saved answer and runs your program on public and held-out inputs with the same schema. Use only the supplied input; do not hardcode its answer.
 Work in /workspace. Do not install packages or use the network.

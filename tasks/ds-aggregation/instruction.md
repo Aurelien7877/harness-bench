@@ -1,3 +1,4 @@
-Clean the CSV: first id wins, then exclude cancelled and missing amounts; include refunds and zeros. Produce excluded_rows, net_total, by_region. Use decimal-safe arithmetic.
-Write analyze.py accepting INPUT_PATH OUTPUT_JSON_PATH. Run it on sales.csv and save answer.json. The verifier will also run your program on another input with the same schema.
+Clean the CSV. Deduplicate by id first, retaining its first row even when that row is later excluded. Then exclude cancelled rows and empty amounts. Count all discarded rows in excluded_rows. Include signed refunds and valid zeros. Report net_total and by_region for regions with at least one retained valid row, including zero totals. Use decimal-safe arithmetic; input amounts have at most two decimal places.
+Output exactly these fields (JSON object order does not matter): {"excluded_rows": "number", "net_total": "number", "by_region": "object"}
+Write analyze.py accepting INPUT_PATH OUTPUT_JSON_PATH. Run it on sales.csv and save answer.json. The verifier checks that saved answer and runs your program on public and held-out inputs with the same schema. Use only the supplied input; do not hardcode its answer.
 Work in /workspace. Do not install packages or use the network.

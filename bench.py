@@ -1,6 +1,7 @@
 """Small campaign planner around Harbor. Harbor executes and grades every trial."""
 import argparse
 import csv
+import copy
 import hashlib
 import importlib.metadata
 import json
@@ -14,7 +15,7 @@ import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
 
-from scripts.campaign_results import classify
+from scripts.campaign_results import classify, summarize
 
 ROOT = Path(__file__).resolve().parent
 HARBOR = ROOT / '.venv/bin/harbor'
@@ -36,12 +37,20 @@ def folder_bytes(directory=ROOT):
     return size
 
 
-def runtime_env():
-    # Keep normal Docker discovery. The entrypoint relocates only Harbor caches.
-    env = dict(os.environ)
-    env.update(PYTHONPATH=str(ROOT), LITELLM_LOCAL_MODEL_COST_MAP='True')
-    for name in ('CODEX_AUTH_JSON_PATH', 'CODEX_FORCE_AUTH_JSON', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_AUTH_TOKEN'):
-        env.pop(name, None)
+def runtime_env(credential_names=()):
+    # Only deliberate provider credentials may reach Harbor. Isolate personal logins.
+    allowed = {'PATH', 'TMPDIR', 'TEMP', 'TMP', 'LANG', 'LC_ALL', 'LC_CTYPE',
+               'SYSTEMROOT', 'WINDIR', 'SSL_CERT_FILE', 'SSL_CERT_DIR',
+               'DOCKER_HOST', 'DOCKER_CONTEXT', 'DOCKER_CONFIG', 'DOCKER_TLS_VERIFY',
+               'DOCKER_CERT_PATH', 'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY',
+               'http_proxy', 'https_proxy', 'no_proxy'}
+    env = {k:v for k,v in os.environ.items() if k in allowed or k in credential_names}
+    home = ROOT / '.home'
+    env.update(HOME=str(home), XDG_CONFIG_HOME=str(home/'.config'),
+               XDG_CACHE_HOME=str(ROOT/'.cache'), PYTHONPATH=str(ROOT),
+               LITELLM_LOCAL_MODEL_COST_MAP='True')
+    # Docker discovery stays on the host; this directory is never mounted into trials.
+    env.setdefault('DOCKER_CONFIG', str(Path.home()/'.docker'))
     env['PATH'] = str(ROOT / '.venv/bin') + os.pathsep + env.get('PATH', '')
     # Preserve the socket location, not the user's Docker configuration/secrets.
     if 'DOCKER_HOST' not in env:
@@ -61,6 +70,26 @@ def parse_models(items):
             raise ValueError(f'Duplicate model for {key}')
         result[key] = value
     return result
+
+
+def read_json_object(path):
+    """Partial files remain diagnosable instead of destroying the whole report."""
+    try:
+        value = path.read_text()
+        result = json.loads(value)
+        if not isinstance(result, dict):
+            raise ValueError('Expected a JSON object')
+        return result
+    except (OSError, ValueError) as error:
+        return {'exception_info': {'exception_type':'InvalidResultFile',
+                                  'exception_message':type(error).__name__}}
+
+
+def write_manifest(campaign, manifest):
+    path = campaign/'manifest.json'
+    temporary = path.with_suffix('.tmp')
+    temporary.write_text(json.dumps(manifest, indent=2))
+    temporary.replace(path)
 
 
 def build_plan(suite, harnesses, models, attempts=1, *, local=False):
@@ -84,6 +113,10 @@ def build_plan(suite, harnesses, models, attempts=1, *, local=False):
     paid = sum(c['harness'] not in ('oracle', 'nop') for c in cells)
     if local and any(h not in ('pi', 'opencode', 'droid', 'dsh') for h in harnesses):
         raise ValueError('Local inference supports pi, opencode, droid and dsh')
+    if local and any(not c['model'] for c in cells):
+        raise ValueError('Local inference requires an explicit model for every harness')
+    if local and len({c['model'] for c in cells}) != 1:
+        raise ValueError('A local campaign compares the same model tag across harnesses')
     reserved = 0 if local else paid * settings['reserve_eur_per_trial']
     if reserved > settings['budget_eur']:
         raise ValueError(f'{len(cells)} runs reserve EUR {reserved:.2f}, above EUR {settings["budget_eur"]:.2f}; reduce tasks/harnesses/attempts')
@@ -183,8 +216,14 @@ def report(campaign):
     manifest = json.loads((campaign / 'manifest.json').read_text())
     rows = []
     for cell in manifest['cells']:
-        files = list((ROOT / 'runs/jobs' / cell['job']).glob('*/result.json'))
-        result = json.loads(files[0].read_text()) if files else {}
+        files = sorted((ROOT / 'runs/jobs' / cell['job']).glob('*/result.json'))
+        result = read_json_object(files[0]) if files else {}
+        if len(files) > 1:
+            result = {'exception_info': {'exception_type':'AmbiguousResults',
+                                        'exception_message':'Multiple trial results for one scheduled cell'}}
+        if not result and cell.get('returncode'):
+            result = {'exception_info': {'exception_type':'LauncherError',
+                                        'exception_message':f"Harbor exited {cell['returncode']} without a result"}}
         usage = result.get('agent_result') or {}
         rewards = (result.get('verifier_result') or {}).get('rewards') or {}
         error = result.get('exception_info') or {}
@@ -194,19 +233,19 @@ def report(campaign):
             elapsed = (datetime.fromisoformat(timing['finished_at']) - datetime.fromisoformat(timing['started_at'])).total_seconds()
         task_meta = tomllib.loads((ROOT/'tasks'/cell['task']/'task.toml').read_text()).get('metadata', {}) if (ROOT/'tasks'/cell['task']/'task.toml').exists() else {}
         status = classify(result, installed=manifest.get('install_only',False),
-                          started=(ROOT/'runs/jobs'/cell['job']).exists())
+                          started=bool(cell.get('started_at')) or (ROOT/'runs/jobs'/cell['job']).exists())
         criteria = {}
         if files:
             diagnostic = files[0].parent/'verifier/criteria.json'
             if diagnostic.exists():
-                criteria = json.loads(diagnostic.read_text()).get('checks',{})
+                criteria = read_json_object(diagnostic).get('checks',{})
         script = None
         if files:
             workspace = files[0].parent/'artifacts/workspace'
             if workspace.exists():
                 script = (workspace/'analyze.py').is_file()
         rows.append({**{k:cell[k] for k in ('harness','model','task','attempt')},
-                     'category': task_meta.get('category'), 'version': (result.get('agent_info') or {}).get('version'),
+                     'category': cell.get('category', task_meta.get('category')), 'version': (result.get('agent_info') or {}).get('version'),
                      'agent_seconds': elapsed,
                      'status': status, 'error_type':error.get('exception_type'),
                      'error_message':error.get('exception_message'),
@@ -224,26 +263,38 @@ def report(campaign):
         lines += [f'| {r["harness"]} | {r["status"]} | {r["version"] or "unknown"} |' for r in rows]
         (campaign/'report.md').write_text('\n'.join(lines)+'\n')
         return rows
-    lines = ['# Campaign results', '', 'Missing costs are unknown, never zero. USD usage is not converted to EUR. Errors and incomplete trials remain in the denominator.', '', '| Harness | Passed / scheduled | Graded | Errors or incomplete | Known cost USD | Unknown cost trials |', '|---|---:|---:|---:|---:|---:|']
-    for h in sorted({r['harness'] for r in rows}):
-        group = [r for r in rows if r['harness']==h]
-        costs = [r['cost_usd'] for r in group if r['cost_usd'] is not None]
-        cost_text = f'{sum(costs):.4f}' if costs else 'unknown'
-        lines.append(f'| {h} | {sum(r["reward"]==1 and r["status"] in ("passed","incorrect") for r in group)}/{len(group)} | {sum(r["status"] in ("passed","incorrect") for r in group)} | {sum(r["status"] not in ("passed","incorrect") for r in group)} | {cost_text} | {sum(r["cost_usd"] is None for r in group)} |')
-    lines += ['', '| Harness | Category | Passed / scheduled |', '|---|---|---:|']
-    for h, category in sorted({(r['harness'],r['category'] or 'unknown') for r in rows}):
-        group = [r for r in rows if r['harness']==h and (r['category'] or 'unknown')==category]
-        lines.append(f'| {h} | {category} | {sum(r["reward"]==1 and r["status"] in ("passed","incorrect") for r in group)}/{len(group)} |')
-    lines += ['', '| Harness | Passed | Incorrect | Timeout | Technical error | Not run / incomplete |',
-              '|---|---:|---:|---:|---:|---:|']
-    for h in sorted({r['harness'] for r in rows}):
-        group = [r for r in rows if r['harness']==h]
-        counts = {status:sum(r['status']==status for r in group)
-                  for status in ('passed','incorrect','timeout','technical_error','not_run','incomplete')}
-        rates = [f"{100*counts[k]/len(group):.0f}%" for k in ('passed','incorrect','timeout','technical_error')]
-        rates.append(f"{100*(counts['not_run']+counts['incomplete'])/len(group):.0f}%")
-        lines.append('| '+h+' | '+' | '.join(rates)+' |')
-    lines += ['', 'Small screening sample only. Do not infer a universal winner. Compare matched model configurations separately from native product configurations.']
+    lines = ['# Campaign results', '',
+             'Startup is a separate health check. Work success includes all scheduled work trials, including failures and unfinished trials.',
+             '95% Wilson intervals describe this small sample. Tasks are handpicked, and repeated attempts are not independent evidence of general ability.',
+             'Missing measurements stay unknown. Known costs are partial when coverage is incomplete; USD is not converted to EUR.', '',
+             '| Harness | Model | Work passed / scheduled | Success | 95% interval | Startup | Median agent seconds |',
+             '|---|---|---:|---:|---:|---:|---:|']
+    summaries = summarize(rows)
+    def text(value, digits=1):
+        return 'unknown' if value is None else f'{value:.{digits}f}'
+    for summary in summaries:
+        s = summary
+        interval = 'N/A' if s['success_ci_low'] is None else f"{s['success_ci_low']:.1f}% to {s['success_ci_high']:.1f}%"
+        rate = 'N/A' if s['success_rate'] is None else f"{s['success_rate']:.1f}%"
+        lines.append(f"| {s['harness']} | {s['model']} | {s['passed']}/{s['scored']} | {rate} | {interval} | {s['startup_passed']}/{s['startup_scheduled']} | {text(s['median_seconds'])} ({s['time_observations']} measured) |")
+    lines += ['', '| Harness | Model | Category | Passed / scheduled |', '|---|---|---|---:|']
+    for h, model, category in sorted({(r['harness'],r['model'] or 'unknown',r['category'] or 'unknown') for r in rows}):
+        group = [r for r in rows if r['harness']==h and (r['model'] or 'unknown')==model and (r['category'] or 'unknown')==category]
+        lines.append(f'| {h} | {model} | {category} | {sum(r["status"]=="passed" for r in group)}/{len(group)} |')
+    lines += ['', '| Harness | Model | Incorrect | Timeout | Technical error | Not run / incomplete |',
+              '|---|---|---:|---:|---:|---:|']
+    for s in summaries:
+        counts = s['outcomes']
+        def rate(statuses):
+            count = sum(counts.get(status,0) for status in statuses)
+            return f"{count}/{s['scored']} ({100*count/s['scored']:.1f}%)" if s['scored'] else 'N/A'
+        lines.append('| '+s['harness']+' | '+s['model']+' | '+' | '.join([
+            rate(['incorrect']),rate(['timeout']),rate(['technical_error']),rate(['not_run','incomplete'])])+' |')
+    lines += ['', '| Harness | Model | Known cost USD | Cost coverage | Input tokens | Output tokens |',
+              '|---|---|---:|---:|---:|---:|']
+    for s in summaries:
+        lines.append(f"| {s['harness']} | {s['model']} | {text(s['known_cost_usd'],4)} | {s['cost_observations']}/{s['scheduled']} | {text(s['input_tokens'],0)} ({s['input_tokens_observations']}/{s['scheduled']}) | {text(s['output_tokens'],0)} ({s['output_tokens_observations']}/{s['scheduled']}) |")
+    lines += ['', 'No overall winner is declared. Compare the same tasks, model weights, limits and hardware, then inspect the saved programs and logs.']
     (campaign / 'report.md').write_text('\n'.join(lines)+'\n')
     return rows
 
@@ -287,7 +338,7 @@ def execute(plan, provider_cap=None, install_only=False, progress=None, settings
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
     campaign = ROOT / 'runs/campaigns' / stamp
     campaign.mkdir(parents=True)
-    manifest = dict(plan, harbor_version=importlib.metadata.version('harbor'), provider_cap_attested_eur=provider_cap, install_only=install_only)
+    manifest = dict(copy.deepcopy(plan), state='running', harbor_version=importlib.metadata.version('harbor'), provider_cap_attested_eur=provider_cap, install_only=install_only)
     manifest['configuration_snapshot'] = {'settings':settings, 'harnesses':registry}
     manifest['task_file_hashes'] = {
         str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()
@@ -298,12 +349,13 @@ def execute(plan, provider_cap=None, install_only=False, progress=None, settings
     manifest['base_image_id'] = image.stdout.strip() if image.returncode == 0 else None
     for i, cell in enumerate(manifest['cells']):
         cell['job'] = f'{stamp}-{i:03}-{cell["harness"]}'
+        metadata = tomllib.loads((ROOT/'tasks'/cell['task']/'task.toml').read_text()).get('metadata',{})
+        cell['category'] = metadata.get('category')
     manifest['config_hashes'] = {p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in (ROOT/'config').glob('*.toml')}
-    (campaign / 'manifest.json').write_text(json.dumps(manifest, indent=2))
+    write_manifest(campaign, manifest)
     if progress:
         progress('campaign', {'path': campaign, 'total': len(manifest['cells'])})
     static_bytes = initial_bytes - folder_bytes(ROOT/'runs')
-    manifest['state'] = 'running'
     try:
         for cell in manifest['cells']:
             for relative, digest in manifest['task_file_hashes'].items():
@@ -312,12 +364,15 @@ def execute(plan, provider_cap=None, install_only=False, progress=None, settings
             config = job_config(cell, cell['job'], install_only, snapshot=(settings, registry), local=plan.get('local', False))
             path = campaign / (cell['job']+'.json')
             path.write_text(json.dumps(config, indent=2))
+            cell['started_at'] = datetime.now(timezone.utc).isoformat()
+            write_manifest(campaign, manifest)
             if progress:
                 progress('trial_start', cell)
             else:
                 print(f'{cell["harness"]}: {cell["task"]}', flush=True)
             with (campaign / (cell['job']+'.log')).open('w') as log:
-                process = subprocess.Popen([*HARBOR_COMMAND,'run','-c',str(path)], env=runtime_env(), stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+                credential_names = () if plan.get('local') or install_only else registry.get(cell['harness'],{}).get('credential_env',())
+                process = subprocess.Popen([*HARBOR_COMMAND,'run','-c',str(path)], env=runtime_env(credential_names), stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
                 try:
                     while process.poll() is None:
                         if (static_bytes + folder_bytes(ROOT/'runs'))/1e9 >= settings['stop_folder_gb']:
@@ -341,7 +396,8 @@ def execute(plan, provider_cap=None, install_only=False, progress=None, settings
                             progress('heartbeat', dict(cell,idle_seconds=idle,last_event=event))
                         time.sleep(2)
                 except BaseException:
-                    os.killpg(process.pid, signal.SIGINT)
+                    if process.poll() is None:
+                        os.killpg(process.pid, signal.SIGINT)
                     try:
                         process.wait(timeout=15)
                     except subprocess.TimeoutExpired:
@@ -349,32 +405,29 @@ def execute(plan, provider_cap=None, install_only=False, progress=None, settings
                         process.wait()
                     raise
             latest = list((ROOT/'runs/jobs'/cell['job']).glob('*/result.json'))
-            result = json.loads(latest[0].read_text()) if latest else {}
+            result = read_json_object(latest[0]) if latest else {}
+            cell['returncode'] = process.returncode
+            cell['finished_at'] = datetime.now(timezone.utc).isoformat()
             if plan.get('local'):
                 try:
                     with urllib.request.urlopen('http://127.0.0.1:11434/api/ps',timeout=5) as response:
                         cell['ollama_runtime_after'] = json.load(response)
                 except OSError:
                     cell['ollama_runtime_after'] = None
-            manifest_path = campaign/'manifest.json'
-            temporary = manifest_path.with_suffix('.tmp')
-            temporary.write_text(json.dumps(manifest,indent=2))
-            temporary.replace(manifest_path)
+            write_manifest(campaign, manifest)
             if progress:
                 progress('trial_end', dict(cell, result=result, returncode=process.returncode))
             if process.returncode and not plan.get('local'):
                 raise RuntimeError(f'Harbor failed; see {log.name}')
             latest = list((ROOT/'runs/jobs'/cell['job']).glob('*/result.json'))
-            error = json.loads(latest[0].read_text()).get('exception_info') if latest else None
+            error = read_json_object(latest[0]).get('exception_info') if latest else None
             if plan.get('local'):
                 continue
             if not latest or error:
                 raise RuntimeError('Trial infrastructure/agent error; campaign stopped to avoid wasting money')
     finally:
         manifest['state'] = 'interrupted' if sys.exc_info()[0] else 'finished'
-        temporary = (campaign/'manifest.json').with_suffix('.tmp')
-        temporary.write_text(json.dumps(manifest,indent=2))
-        temporary.replace(campaign/'manifest.json')
+        write_manifest(campaign, manifest)
         rows = report(campaign)
         print(f'Report: {campaign / "report.md"}')
     return 0

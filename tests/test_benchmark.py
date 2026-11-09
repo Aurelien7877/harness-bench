@@ -115,7 +115,7 @@ def test_timeout_keeps_its_status_even_with_a_zero_grade():
 
 
 def test_startup_runs_before_analysis():
-    plan = bench.build_plan("demo", ["pi","opencode"], {}, local=True)
+    plan = bench.build_plan("demo", ["pi","opencode"], dict.fromkeys(["pi","opencode"],"test-model"), local=True)
     assert [c["task"] for c in plan["cells"][:2]] == ["startup","startup"]
 
 

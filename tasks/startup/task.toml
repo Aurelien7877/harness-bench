@@ -3,7 +3,7 @@ schema_version = "1.4"
 category = "startup"
 author_name = "Personal harness benchmark"
 difficulty = "easy"
-source = "personal-v1; synthetic data; held-out input"
+source = "personal-v3; synthetic data; held-out inputs"
 [agent]
 timeout_sec = 180
 [verifier]
