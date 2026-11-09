@@ -84,3 +84,20 @@ def test_report_preserves_errors_and_unknown_cost(tmp_path, monkeypatch):
     assert len(rows) == 2 and rows[1]['status']=='incomplete'
     assert all(r['cost_usd'] is None for r in rows)
     assert '1/2' in (campaign/'report.md').read_text()
+
+
+def test_local_pair_uses_same_weights_and_no_provider_credential(monkeypatch):
+    monkeypatch.setenv('OPENAI_API_KEY', 'unused-cloud-key')
+    names = ['pi', 'opencode']
+    plan = bench.build_plan('demo', names, dict.fromkeys(names, 'qwen3:4b'), local=True)
+    assert plan['reserved_eur'] == 0
+    for cell in plan['cells']:
+        agent = bench.job_config(cell, 'local-test', local=True)['agents'][0]
+        assert agent['base_url'] == 'http://host.docker.internal:11434/v1'
+        assert agent['model_name'].endswith('/qwen3:4b')
+        assert agent['env'] == {'BENCH_LOCAL_KEY': 'ollama'}
+        if cell['harness'] == 'opencode':
+            assert agent['model_name'].startswith('bench-local/')
+            assert agent['skip_model_parsing']
+    with pytest.raises(ValueError, match='Local inference'):
+        bench.build_plan('demo', ['droid'], {'droid': 'qwen3:4b'}, local=True)

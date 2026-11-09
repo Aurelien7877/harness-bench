@@ -35,6 +35,17 @@ The first run downloads the Python dependencies, a shared Docker image and the m
 
 Open the `report.md` path printed at the end. Its sibling `results.csv` lists each planned trial, grade, duration and available token counts. The manifest records the Ollama model digest, task hashes and run configuration. Missing usage fields stay empty.
 
+## Notebook and Python script
+
+Open [Local comparison](notebooks/local-comparison.ipynb) in Jupyter or VS Code with a Python kernel. Run All previews the terminal command and reads existing results. Edit the model, harnesses, suite and number of attempts in the first settings cell.
+
+The companion [Python script](scripts/local_comparison.py) prints a command by default. Add the explicit run flag when you want to start inference yourself.
+
+```sh
+python3 scripts/local_comparison.py
+python3 scripts/local_comparison.py --suite quick --attempts 2 --run
+```
+
 ## What the agents do
 
 | Category | Tasks | What a pass requires |

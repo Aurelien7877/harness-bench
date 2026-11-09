@@ -23,8 +23,15 @@ def read_config():
     return tuple(tomllib.loads((ROOT / 'config' / f'{name}.toml').read_text()) for name in ('bench', 'harnesses'))
 
 
-def folder_bytes():
-    return sum(p.stat().st_size for p in ROOT.rglob('*') if p.is_file() and not p.is_symlink())
+def folder_bytes(directory=ROOT):
+    size = 0
+    for parent, _, names in os.walk(directory):
+        for name in names:
+            try:
+                size += os.lstat(os.path.join(parent, name)).st_size
+            except FileNotFoundError:
+                continue
+    return size
 
 
 def runtime_env():
@@ -204,7 +211,8 @@ def execute(plan, provider_cap=None, install_only=False):
             if h == 'dsh':
                 from adapters.command import DSH
                 DSH.model_patch(cell['model'])
-    if folder_bytes()/1e9 >= settings['stop_folder_gb']:
+    initial_bytes = folder_bytes()
+    if initial_bytes/1e9 >= settings['stop_folder_gb']:
         raise ValueError('Folder near storage limit; archive your runs before continuing')
     if plan.get('local'):
         # /api/tags includes the digest of the locally installed weights.
@@ -232,6 +240,7 @@ def execute(plan, provider_cap=None, install_only=False):
         cell['job'] = f'{stamp}-{i:03}-{cell["harness"]}'
     manifest['config_hashes'] = {p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in (ROOT/'config').glob('*.toml')}
     (campaign / 'manifest.json').write_text(json.dumps(manifest, indent=2))
+    static_bytes = initial_bytes - folder_bytes(ROOT/'runs')
     try:
         for cell in manifest['cells']:
             for relative, digest in manifest['task_file_hashes'].items():
@@ -245,7 +254,7 @@ def execute(plan, provider_cap=None, install_only=False):
                 process = subprocess.Popen([*HARBOR_COMMAND,'run','-c',str(path)], env=runtime_env(), stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
                 try:
                     while process.poll() is None:
-                        if folder_bytes()/1e9 >= settings['stop_folder_gb']:
+                        if (static_bytes + folder_bytes(ROOT/'runs'))/1e9 >= settings['stop_folder_gb']:
                             raise RuntimeError('Storage guard reached; stopping campaign')
                         time.sleep(2)
                 except BaseException:
@@ -259,7 +268,10 @@ def execute(plan, provider_cap=None, install_only=False):
             if process.returncode:
                 raise RuntimeError(f'Harbor failed; see {log.name}')
             latest = list((ROOT/'runs/jobs'/cell['job']).glob('*/result.json'))
-            if not latest or json.loads(latest[0].read_text()).get('exception_info'):
+            error = json.loads(latest[0].read_text()).get('exception_info') if latest else None
+            if plan.get('local') and error and error.get('exception_type') == 'AgentTimeoutError':
+                continue
+            if not latest or error:
                 raise RuntimeError('Trial infrastructure/agent error; campaign stopped to avoid wasting money')
     finally:
         rows = report(campaign)
