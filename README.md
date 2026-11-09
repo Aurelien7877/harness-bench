@@ -1,6 +1,6 @@
 # Harness Bench
 
-![Harness Bench, a terminal banner drawn with mint and coral ASCII lettering](assets/harness-bench.svg)
+![Harness Bench: Pi and OpenCode share a task and Ollama model, then a common grader checks their outputs](assets/harness-bench.svg)
 
 [![Local inference with Ollama](https://img.shields.io/badge/local_inference-Ollama-16765f?style=flat-square)](#try-the-local-demo)
 [![Open the Python notebook](https://img.shields.io/badge/Jupyter-open_notebook-b54f20?style=flat-square)](notebooks/local-comparison.ipynb)
