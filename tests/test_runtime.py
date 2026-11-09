@@ -111,3 +111,18 @@ def test_notebook_updates_stale_dependencies_before_docker_setup(tmp_path, monke
     assert len(checks)==2
     assert calls[0][-2:]==['-r',str(tmp_path/'requirements.lock')]
     assert calls[1]==['docker','info']
+
+
+def test_notebook_can_prepare_a_venv_without_pip_or_uv(monkeypatch):
+    import importlib.util
+    import sys
+    notebook = json.loads((bench.ROOT/'notebooks/local-comparison.ipynb').read_text())
+    preparation = next(''.join(c['source']) for c in notebook['cells']
+                       if c['cell_type']=='code' and 'docker", "info' in ''.join(c['source']))
+    commands = []
+    monkeypatch.setattr(importlib.util,'find_spec',lambda name:None)
+    monkeypatch.setattr(shutil,'which',lambda name:None)
+    monkeypatch.setattr(bench.subprocess,'run',lambda command,**kw:commands.append(command))
+    exec(compile(preparation,'notebook preparation','exec'),dict(run_new_campaign=False,sys=sys))
+    assert commands[0]==[sys.executable,'-m','ensurepip','--upgrade']
+    assert commands[1]==[sys.executable,'-m','pip','install','matplotlib>=3.9,<4']
