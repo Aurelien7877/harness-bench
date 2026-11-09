@@ -1,106 +1,98 @@
 # Harness Bench
 
-Give two coding agents the same model, the same files and the same job. Can both write a program that still works when the data changes?
+![Harness Bench, a terminal banner drawn with mint and coral ASCII lettering](assets/harness-bench.svg)
 
-```text
-                    same task + input files
-                         /          \
-                +-------+            +----------+
-                |   Pi  |            | OpenCode |
-                +-------+            +----------+
-                    |    \          /     |
-                    |     [ Ollama ]      |
-                    |      one model      |
-                    v                     v
-                output A              output B
-                     \                  /
-                       [ same grader ]
-```
+[![Local inference with Ollama](https://img.shields.io/badge/local_inference-Ollama-16765f?style=flat-square)](#try-the-local-demo)
+[![Open the Python notebook](https://img.shields.io/badge/Jupyter-open_notebook-b54f20?style=flat-square)](notebooks/local-comparison.ipynb)
+[![Seven harness configurations](https://img.shields.io/badge/harnesses-7-514d9b?style=flat-square)](config/harnesses.toml)
+[![Eight graded tasks](https://img.shields.io/badge/graded_tasks-8-275f85?style=flat-square)](#inside-the-benchmark)
 
-Harness Bench runs eight small tasks in Docker using [Harbor](https://github.com/harbor-framework/harbor). Each task has an executable grader. The default local demo compares **Pi and OpenCode** on one data science task. Both use the same Ollama model running on your machine.
+**A small benchmark for comparing AI coding agents on data science, research and everyday work.** Give Pi and OpenCode the same local model, the same input files and the same time limit. See which agent writes a working solution, how long it takes and where it gets stuck.
 
-## Try it locally
+The first experiment asks each harness to evaluate two search systems. Both agents see one set of rankings. The grader runs each agent’s Python program on a second set and checks its recall and reciprocal rank. You can inspect the programs alongside the scores.
 
-Start Docker with Compose and the Ollama app. Install [uv](https://docs.astral.sh/uv/getting-started/installation/) if needed. The commands below target macOS with OrbStack or Docker Desktop. Trial containers reach the host through `host.docker.internal:11434`. On Linux, configure that hostname and a reachable Ollama listener first.
+[Open the notebook](notebooks/local-comparison.ipynb) · [Try the local demo](#try-the-local-demo) · [Browse the tasks](tasks) · [Add a harness](#extend-the-benchmark)
+
+## Try the local demo
+
+You need [uv](https://docs.astral.sh/uv/getting-started/installation/), Docker with Compose, and [Ollama](https://ollama.com/). Start Docker and Ollama on your machine. On macOS, the trial containers reach Ollama at `host.docker.internal:11434` through OrbStack or Docker Desktop. On Linux, configure that hostname and a reachable Ollama listener first.
 
 ```sh
 git clone https://github.com/Aurelien7877/harness-bench.git
 cd harness-bench
 make setup
 ollama pull qwen3:4b
-./bench local
-```
-
-The first run downloads the Python dependencies, a shared Docker image and the model. The [Qwen3 4B weights](https://ollama.com/library/qwen3:4b) take about 2.5 GB in Ollama's model store. Each trial installs its pinned CLI in a disposable container. Local inference uses your hardware and requires no paid API key.
-
-Open the `report.md` path printed at the end. Its sibling `results.csv` lists each planned trial, grade, duration and available token counts. The manifest records the Ollama model digest, task hashes and run configuration. Missing usage fields stay empty.
-
-## Notebook and Python script
-
-Open [Local comparison](notebooks/local-comparison.ipynb) in Jupyter or VS Code with a Python kernel. Run All previews the terminal command and reads existing results. Edit the model, harnesses, suite and number of attempts in the first settings cell.
-
-The companion [Python script](scripts/local_comparison.py) prints a command by default. Add the explicit run flag when you want to start inference yourself.
-
-```sh
 python3 scripts/local_comparison.py
-python3 scripts/local_comparison.py --suite quick --attempts 2 --run
 ```
 
-## What the agents do
+The last line **previews the command**. When you are ready to run one task with both harnesses, use `./bench local`. The [Qwen3 4B weights](https://ollama.com/library/qwen3:4b) occupy about 2.5 GB in Ollama’s model store. Each agent gets a fresh Docker container with its pinned CLI.
 
-| Category | Tasks | What a pass requires |
+**Prefer Jupyter?** Open the [comparison notebook](notebooks/local-comparison.ipynb), choose a model and a task suite, then select **Run All**. The notebook prints the terminal command and reads any results you have already saved. The [companion script](scripts/local_comparison.py) also accepts `--run` when you want to start inference.
+
+## Inside the benchmark
+
+| Category | Tasks | What the grader checks |
 |---|---:|---|
-| Python coding | 2 | Implement functions from [HumanEval](https://github.com/openai/human-eval) that pass the original tests. |
-| Data science | 3 | Clean a sales table, calculate retrieval metrics, and identify leakage in an experiment. The two programming tasks also run on hidden inputs. |
-| Research | 1 | Resolve a contradiction in a fixed set of dated sources and identify the supporting documents. |
-| General work | 1 | Apply payments to invoices while handling duplicates and unapplied credit. |
-| Context | 1 | Recover the current budget and region from a file of revised instructions. |
+| Python coding | 2 | Two [HumanEval](https://github.com/openai/human-eval) functions pass their original tests. |
+| Data science | 3 | A sales aggregation handles duplicates and refunds. A retrieval script computes recall@3 and MRR@3. A leakage audit identifies features that use future information. |
+| Research | 1 | A recommendation cites the authoritative sources in a small collection of conflicting reports. |
+| General work | 1 | Invoice balances reconcile after partial payments, duplicated records and excess credit. |
+| Context retrieval | 1 | The agent recovers the latest budget and region from a file of revised instructions. |
 
-The local demo uses the retrieval task. It checks recall@3 and reciprocal rank@3 on two sets of rankings. A script that merely prints the visible answer fails the hidden check.
-
-## Compare two harnesses
-
-Start with the single-task demo. Then broaden the workload or repeat it to see whether a difference persists. Every additional attempt repeats each selected task for each harness.
+Pick `demo` for **1 task**, `smoke` for **2**, `quick` for **5** or `full` for **8**. For example, this previews **20 trials** across two harnesses, five tasks and two attempts.
 
 ```sh
-./bench local --suite quick --attempts 2
-./bench local --harness pi --model qwen3:4b
+python3 scripts/local_comparison.py --suite quick --attempts 2
 ```
 
-| Suite | Tasks per harness | Purpose |
-|---|---:|---|
-| demo | 1 | Exercise file editing, execution and verification |
-| smoke | 2 | Check a coding task and a data task |
-| quick | 5 | Screen candidates across four categories |
-| full | 8 | Include the leakage audit and context task |
+## Read the results
 
-For an interpretable comparison, hold the model digest, context length, hardware and timeout fixed. Record the Ollama version and any reasoning settings you change. Look at paired task outcomes and the time spent in the agent. A timeout, an installation failure and an incorrect calculation deserve different diagnoses. Two attempts on five tasks are a starting point for choosing which failures to investigate.
+Open the `report.md` path printed when the campaign finishes. Use `results.csv` to compare the same task and attempt across harnesses. It includes the grade, status, agent time and available token counts. Blank usage fields mean the harness did not report that value. The manifest records the task hashes, model digest for Ollama runs, and configuration used for the campaign.
 
-## Check the graders for free
+If one agent passes and another fails, open both workspaces. Check whether the failing agent misunderstood the metric, wrote a program that only handles the sample, or ran out of time. Repeat promising comparisons with the same model digest, hardware, context length and timeout before drawing conclusions.
 
-```sh
-make test
-./bench run --suite full --harness oracle --harness nop
-```
+## Supported harnesses
 
-The reference solutions should pass 8/8. The idle agent should score 0/8. Both commands work without a model key.
+| Harnesses | Integration | Inference covered by the launcher |
+|---|---|---|
+| Pi and OpenCode | [Harbor](https://github.com/harbor-framework/harbor) adapters | Ollama and hosted models |
+| Claude Code and Codex | Harbor adapters | Hosted models |
+| Oh My Pi (OMP), Factory Droid and DeepSeek Harness | [CLI adapters](adapters/command.py) | Hosted configurations |
 
-## Hosted models and other harnesses
+See the [harness registry](config/harnesses.toml) for exact versions and credential names. You can check a CLI installation with `./bench install-check --harness droid`.
 
-Seven configurations ship in [harnesses.toml](config/harnesses.toml). Pi, OpenCode, Claude Code and Codex use Harbor adapters. OMP, Factory Droid and DeepSeek Harness use the [CLI adapters](adapters/command.py). The Ollama command is configured for Pi and OpenCode. Install a specific CLI in a disposable container with `./bench install-check --harness droid`.
+<details>
+<summary><strong>Run a hosted model with a spending limit</strong></summary>
 
-To run a hosted model, export its provider key in your shell. Set a hard spending limit or prepaid balance at the provider first. The planner reserves EUR 1 per hosted trial and allows EUR 20 per campaign. The actual bill depends on provider usage. The cap flag records the external limit you set.
+Set a hard spending limit or prepaid balance at your provider and export its API key. The planner reserves EUR 1 per hosted trial and allows EUR 20 per campaign. The provider controls the actual billing limit. Replace the example model ID with one available on your account.
 
 ```sh
 ./bench plan --suite smoke --harness pi --model pi=anthropic/YOUR_MODEL_ID
 ./bench run --suite smoke --harness pi --model pi=anthropic/YOUR_MODEL_ID --provider-cap-eur 20
 ```
 
-## Change a model, CLI or task
+</details>
 
-- **Model**. Pull another tool-capable Ollama model and pass its tag with `./bench local --model TAG`.
-- **CLI version**. Edit its version in [harnesses.toml](config/harnesses.toml), then run `./bench install-check --harness NAME`.
-- **Harness**. Copy the [registry example](config/new-harness.example.toml) and select a Harbor adapter or a local adapter class.
-- **Task**. Add a Harbor task under [tasks](tasks), put its name in a [suite](config/bench.toml), then check the reference solution and idle baseline.
+<details>
+<summary><strong>Verify the graders and inspect disk usage</strong></summary>
 
-Runs execute sequentially and share a Docker base image. A storage check stops campaigns at 18 GB in the project folder. Docker layers and Ollama weights live in their respective stores. HumanEval attribution and the upstream license are in [vendor/humaneval](vendor/humaneval).
+```sh
+make test
+./bench run --suite full --harness oracle --harness nop
+./bench doctor
+```
+
+The reference solutions should score 8/8 and the idle agent 0/8. These checks use no model key. Trials run sequentially and share a Docker base image. The project’s storage guard stops campaigns at 18 GB in the project folder. Docker layers and Ollama weights live in their own stores.
+
+</details>
+
+## Extend the benchmark
+
+| To change | Start here |
+|---|---|
+| Local model | Pull a tool-capable Ollama model and pass its tag with `./bench local --model TAG`. |
+| CLI version | Edit the pin in [harnesses.toml](config/harnesses.toml), then run its installation check. |
+| Harness | Copy the [registry example](config/new-harness.example.toml) and select an upstream adapter or a local adapter class. |
+| Task | Add a [Harbor task](tasks), register it in a [suite](config/bench.toml), and check it with both the reference solution and idle agent. |
+
+The Python coding fixtures retain their [HumanEval provenance and license](vendor/humaneval).

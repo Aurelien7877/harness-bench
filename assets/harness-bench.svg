@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 224" role="img" aria-labelledby="title desc">
+<title id="title">Harness Bench</title>
+<desc id="desc">Mint and coral ASCII lettering above the path from shared input files to independent graders.</desc>
+<rect width="1240" height="224" rx="16" fill="#101b29"/>
+<path d="M0 44H1240 M0 184H1240" stroke="#30465a"/>
+<g font-family="ui-monospace,Menlo,Consolas,monospace">
+<text x="34" y="29" font-size="15" fill="#c1d6de">&gt;_  harness-bench</text>
+<text x="1204" y="29" text-anchor="end" font-size="15" fill="#b6c7d5">LOCAL AGENT EVALUATION</text>
+<g xml:space="preserve" font-size="14" font-weight="bold"><text x="34" y="85" fill="#6AF2CA" textLength="656" lengthAdjust="spacingAndGlyphs">##      ##    ######    ########    ##      ##  ##########    ########    ########</text>
+<text x="734" y="85" fill="#FFAD82" textLength="464" lengthAdjust="spacingAndGlyphs">########    ##########  ##      ##    ########  ##      ##</text>
+<text x="34" y="100" fill="#6AF2CA" textLength="656" lengthAdjust="spacingAndGlyphs">##      ##  ##      ##  ##      ##  ####    ##  ##          ##          ##        </text>
+<text x="734" y="100" fill="#FFAD82" textLength="464" lengthAdjust="spacingAndGlyphs">##      ##  ##          ####    ##  ##          ##      ##</text>
+<text x="34" y="115" fill="#6AF2CA" textLength="656" lengthAdjust="spacingAndGlyphs">##      ##  ##      ##  ##      ##  ####    ##  ##          ##          ##        </text>
+<text x="734" y="115" fill="#FFAD82" textLength="464" lengthAdjust="spacingAndGlyphs">##      ##  ##          ####    ##  ##          ##      ##</text>
+<text x="34" y="130" fill="#6AF2CA" textLength="656" lengthAdjust="spacingAndGlyphs">##########  ##########  ########    ##  ##  ##  ########      ######      ######  </text>
+<text x="734" y="130" fill="#FFAD82" textLength="464" lengthAdjust="spacingAndGlyphs">########    ########    ##  ##  ##  ##          ##########</text>
+<text x="34" y="145" fill="#6AF2CA" textLength="656" lengthAdjust="spacingAndGlyphs">##      ##  ##      ##  ##  ##      ##    ####  ##                  ##          ##</text>
+<text x="734" y="145" fill="#FFAD82" textLength="464" lengthAdjust="spacingAndGlyphs">##      ##  ##          ##    ####  ##          ##      ##</text>
+<text x="34" y="160" fill="#6AF2CA" textLength="656" lengthAdjust="spacingAndGlyphs">##      ##  ##      ##  ##    ##    ##    ####  ##                  ##          ##</text>
+<text x="734" y="160" fill="#FFAD82" textLength="464" lengthAdjust="spacingAndGlyphs">##      ##  ##          ##    ####  ##          ##      ##</text>
+<text x="34" y="175" fill="#6AF2CA" textLength="656" lengthAdjust="spacingAndGlyphs">##      ##  ##      ##  ##      ##  ##      ##  ##########  ########    ########  </text>
+<text x="734" y="175" fill="#FFAD82" textLength="464" lengthAdjust="spacingAndGlyphs">########    ##########  ##      ##    ########  ##      ##</text></g>
+<text x="34" y="210" font-size="16" fill="#c1d6de">input files  -&gt;  agent workspace  -&gt;  hidden checks  -&gt;  results.csv</text>
+</g></svg>
