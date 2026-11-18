@@ -13,12 +13,13 @@ class CommandAgent(BaseAgent):
     package = ""
     binary = ""
 
-    def __init__(self, *args, version, local_model=None, local_context=32768, local_output=8192, local_port=11434, **kwargs):
+    def __init__(self, *args, version, local_model=None, local_context=32768, local_output=8192, local_port=11434, profile=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.local_model = local_model
         self.local_context = local_context
         self.local_output = local_output
         self.local_port = local_port
+        self.profile = profile  # optional tuned guidance, uploaded as AGENTS.md
         self.pin = version
         self.detected_version = None
 
@@ -52,6 +53,8 @@ class CommandAgent(BaseAgent):
         if not self.model_name:
             raise ValueError("An explicit model is required")
         await self.prepare(environment)
+        if self.profile:
+            await environment.upload_file(source_path=self.profile, target_path="/workspace/AGENTS.md")
         prompt = self.logs_dir / "prompt.txt"
         prompt.write_text(instruction)
         await environment.upload_file(source_path=prompt, target_path="/tmp/bench-prompt.txt")

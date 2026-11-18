@@ -34,39 +34,53 @@ def read_results(campaign):
 
 
 
-def run_comparison(model, harnesses, suite="demo", attempts=1, *, timeout_sec=180, context_window=32768, max_output_tokens=8192):
-    """Run a local campaign in the notebook kernel with per-trial progress."""
+def run_comparison(model, harnesses, suite="demo", attempts=1, *, timeout_sec=600, context_window=32768, max_output_tokens=8192, resume=None):
+    """Run (or resume) a local campaign in the notebook kernel with a tqdm bar.
+
+    The bar counts finished trials, shows elapsed time and an ETA, and keeps a
+    live tally of outcomes. Finished trials are saved as they end, so an
+    interrupted campaign can be continued with ``resume=<campaign folder>``.
+    """
+    from collections import Counter
     from tqdm.auto import tqdm
 
     if str(ROOT) not in sys.path:
         sys.path.insert(0, str(ROOT))
     import bench
 
-    plan = bench.build_plan(
+    plan = None if resume else bench.build_plan(
         suite, harnesses, dict.fromkeys(harnesses, model), attempts, local=True
     )
     campaign = None
+    tally = Counter()
     from scripts.campaign_results import classify
-    with tqdm(total=plan["runs"], desc="Harness comparison", unit="trial") as bar:
+    with tqdm(total=plan["runs"] if plan else None, desc="Harness comparison", unit="trial",
+              bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} trials [{elapsed}<{remaining}] {postfix}") as bar:
+        def summary(**current):
+            done = ", ".join(f"{count} {name}" for name, count in sorted(tally.items()))
+            bar.set_postfix({**current, "results": done or "none yet"})
+
         def progress(event, data):
             nonlocal campaign
             if event == "campaign":
                 campaign = data["path"]
+                bar.total = data["total"]
+                getattr(bar, "refresh", lambda: None)()
             elif event == "trial_start":
-                bar.set_postfix(harness=data["harness"], task=data["task"], status="running")
+                summary(now=f"{data['harness']} / {data['task']}", state="running")
             elif event == "heartbeat":
                 idle = data["idle_seconds"]
-                bar.set_postfix(harness=data["harness"], task=data["task"],
-                                event=data["last_event"] or "awaiting events",
-                                idle="unknown" if idle is None else f"{idle:.0f}s")
+                summary(now=f"{data['harness']} / {data['task']}",
+                        last_event=data["last_event"] or "awaiting events",
+                        idle="unknown" if idle is None else f"{idle:.0f}s")
             elif event == "trial_end":
-                result = data["result"]
-                bar.set_postfix(harness=data["harness"], task=data["task"],
-                                status=classify(result,started=True))
+                outcome = classify(data["result"], started=True) if data["result"] else "skipped"
+                tally[outcome] += 1
+                summary(last=f"{data['harness']} / {data['task']} -> {outcome}")
                 bar.update(1)
 
         try:
-            bench.execute(plan, progress=progress, settings_override={
+            bench.execute(plan, progress=progress, resume=resume, settings_override=None if resume else {
                 'timeout_sec':timeout_sec, 'context_window':context_window,
                 'max_output_tokens':max_output_tokens,
             })
@@ -76,6 +90,7 @@ def run_comparison(model, harnesses, suite="demo", attempts=1, *, timeout_sec=18
                 raise
             print(f"Stopped: {type(error).__name__}: {error}")
             print(f"Partial results and logs: {campaign}")
+            print(f"Resume with resume_campaign = {str(campaign.name)!r} in the notebook.")
         else:
             bar.set_description("Comparison finished")
     return campaign
@@ -84,8 +99,8 @@ def run_comparison(model, harnesses, suite="demo", attempts=1, *, timeout_sec=18
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", default="lfm3:1.7b")
-    parser.add_argument("--harness", action="append", choices=["pi", "opencode", "droid", "dsh"])
-    parser.add_argument("--suite", choices=["demo", "smoke", "quick", "full"], default="demo")
+    parser.add_argument("--harness", action="append", choices=["pi", "opencode", "droid", "droid-tuned", "dsh"])
+    parser.add_argument("--suite", choices=["demo", "smoke", "quick", "math", "full", "tune-dev", "tune-test", "tune"], default="demo")
     parser.add_argument("--attempts", type=int, default=1)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--run", action="store_true", help="Start the comparison in this terminal")

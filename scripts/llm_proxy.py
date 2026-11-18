@@ -120,7 +120,11 @@ class Proxy:
 
             do_GET = do_POST = handle_any
 
-        self.server = ThreadingHTTPServer((host, port), Handler)
+        class Server(ThreadingHTTPServer):
+            def handle_error(self, request, client_address):
+                pass  # clients closing keep-alive connections abruptly is normal, not an error
+
+        self.server = Server((host, port), Handler)
         self.server.daemon_threads = True
 
     def log_to(self, path):

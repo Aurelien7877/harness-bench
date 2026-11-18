@@ -15,9 +15,9 @@ COLORS = {"passed":"#198754","incorrect":"#d9534f","timeout":"#e5a11a",
 def classify(result, *, installed=False, started=False):
     error = result.get("exception_info") or {}
     rewards = (result.get("verifier_result") or {}).get("rewards") or {}
-    if error and error.get("exception_type") == "NonZeroAgentExitCodeError" and rewards.get("reward") == 1:
-        # The verifier ran on the finished workspace and passed; the CLI only exited badly (e.g. EPIPE on its log pipe).
-        return "passed"
+    if error and error.get("exception_type") == "NonZeroAgentExitCodeError" and "reward" in rewards:
+        # The verifier graded the finished workspace; the CLI only exited badly (e.g. EPIPE on its log pipe).
+        return "passed" if rewards["reward"] == 1 else "incorrect"
     if error:
         return "timeout" if "timeout" in (error.get("exception_type") or "").lower() else "technical_error"
     if installed and result:

@@ -116,7 +116,8 @@ def test_timeout_keeps_its_status_even_with_a_zero_grade():
     assert classify({}) == "not_run"
     crashed = {"exception_info": {"exception_type": "NonZeroAgentExitCodeError"}}
     assert classify({**crashed, "verifier_result": {"rewards": {"reward": 1}}}) == "passed"
-    assert classify({**crashed, "verifier_result": {"rewards": {"reward": 0}}}) == "technical_error"
+    assert classify({**crashed, "verifier_result": {"rewards": {"reward": 0}}}) == "incorrect"
+    assert classify(crashed) == "technical_error"
 
 
 def test_startup_runs_before_analysis():
@@ -163,7 +164,7 @@ def test_notebook_returns_partial_campaign_after_failure(tmp_path, monkeypatch, 
         def update(self, count):
             self.count += count
 
-    def fail(plan, progress, settings_override):
+    def fail(plan, progress, settings_override, resume=None):
         assert settings_override["timeout_sec"] == 300
         progress("campaign", {"path":tmp_path, "total":plan["runs"]})
         raise failure

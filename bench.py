@@ -7,6 +7,7 @@ import importlib.metadata
 import json
 import os
 import random
+import shutil
 import signal
 import subprocess
 import sys
@@ -21,6 +22,19 @@ from scripts.campaign_results import classify, summarize
 from scripts.llm_proxy import Proxy, summarize_calls
 
 ROOT = Path(__file__).resolve().parent
+
+
+def _find_tools():
+    """IDE-launched notebook kernels often lack Docker and Ollama on PATH; add the usual install folders."""
+    if shutil.which('docker') and shutil.which('ollama'):
+        return
+    extra = [Path.home()/'.orbstack/bin', Path('/usr/local/bin'), Path('/opt/homebrew/bin'),
+             Path('/Applications/Docker.app/Contents/Resources/bin')]
+    known = os.environ.get('PATH', '').split(os.pathsep)
+    os.environ['PATH'] = os.pathsep.join(known + [str(d) for d in extra if d.is_dir() and str(d) not in known])
+
+
+_find_tools()
 HARBOR = ROOT / '.venv/bin/harbor'
 HARBOR_COMMAND = [str(ROOT / '.venv/bin/python'), str(ROOT / 'scripts/harbor_entry.py')]
 
@@ -129,8 +143,8 @@ def build_plan(suite, harnesses, models, attempts=1, *, local=False):
     random.Random(settings['seed']).shuffle(cells)
     cells.sort(key=lambda cell: not cell['task'].startswith('startup'))
     paid = sum(c['harness'] not in ('oracle', 'nop') for c in cells)
-    if local and any(h not in ('pi', 'opencode', 'droid', 'dsh') for h in harnesses):
-        raise ValueError('Local inference supports pi, opencode, droid and dsh')
+    if local and any(h not in ('pi', 'opencode', 'droid', 'dsh', 'droid-tuned') for h in harnesses):
+        raise ValueError('Local inference supports pi, opencode, droid, droid-tuned and dsh')
     if local and any(not c['model'] for c in cells):
         raise ValueError('Local inference requires an explicit model for every harness')
     if local and len({c['model'] for c in cells}) != 1:
@@ -149,6 +163,8 @@ def job_config(cell, name, install_only=False, snapshot=None, *, local=False):
         agent = {'name': h}
     else:
         entry = registry[h]
+        profile = entry.get('profile')
+        h = entry.get('base', h)  # a tuned variant behaves like its base harness
         agent = {'model_name': cell['model'], 'kwargs': {'version': entry['version']},
                  'override_timeout_sec': settings['timeout_sec'],
                  'env': {k: '${' + k + '}' for k in entry['credential_env'] if os.environ.get(k)}}
@@ -167,6 +183,8 @@ def job_config(cell, name, install_only=False, snapshot=None, *, local=False):
         if h in ('droid', 'dsh'):
             agent['skip_model_parsing'] = True
             agent['kwargs'].update(local_model=cell['model'], local_context=context, local_output=output, local_port=port)
+            if profile:
+                agent['kwargs']['profile'] = str(ROOT / profile)
             agent['model_name'] = (
                 'custom:' + cell['model'] + '-0'
                 if h == 'droid' else 'bench-ollama/' + cell['model']

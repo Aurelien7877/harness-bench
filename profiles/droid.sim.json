@@ -1,0 +1,18 @@
+{
+  "about": "Self-Improvement Memory in the style of arXiv 2611.18856: edits grouped by root cause, with predicted and observed outcomes. Evolve split = ds-aggregation, research-source, general-reconciliation. Held-out = ds-retrieval, research-evidence, context-contact.",
+  "baseline": "full campaign 20261118T110029179432Z, droid 14/20 work tasks",
+  "problems": [
+    {"id": "P1", "name": "invalid JSON: stray closing brace appended to answer.json", "opened_round": 1,
+     "evidence": ["research-source", "context-contact"],
+     "attempts": [{"round": 1, "accepted": true, "what": "rule 1: validate answer.json with json.tool before finishing",
+                   "predicted": ["research-source"], "observed": null, "domain": "evolve"}]},
+    {"id": "P2", "name": "reads the data but never writes or runs analyze.py (premature completion)", "opened_round": 1,
+     "evidence": ["ds-aggregation", "general-reconciliation", "ds-retrieval"],
+     "attempts": [{"round": 1, "accepted": true, "what": "rule 3 and rule 5: write the program, run it, check outputs",
+                   "predicted": ["ds-aggregation", "general-reconciliation"], "observed": null, "domain": "evolve"}]},
+    {"id": "P3", "name": "key name typo then repeated rewrites of a correct file", "opened_round": 1,
+     "evidence": ["research-evidence"],
+     "attempts": [{"round": 1, "accepted": true, "what": "rules 2 and 4: copy keys exactly, check once and stop",
+                   "predicted": ["research-evidence"], "observed": null, "domain": "held-out"}]}
+  ]
+}

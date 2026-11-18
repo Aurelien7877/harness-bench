@@ -36,6 +36,14 @@ version = "1.14.0"
 credential_env = ["FACTORY_API_KEY"]
 status = "local thin adapter; paid execution not yet tested"
 
+[droid-tuned]
+base = "droid"
+import_path = "adapters.command:Droid"
+version = "1.14.0"
+profile = "profiles/droid.md"
+credential_env = ["FACTORY_API_KEY"]
+status = "droid plus a tuned AGENTS.md profile (see profiles/droid.sim.json)"
+
 [dsh]
 import_path = "adapters.command:DSH"
 version = "0.2.2-rc.1"
