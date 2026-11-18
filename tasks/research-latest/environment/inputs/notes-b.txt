@@ -1,0 +1,2 @@
+Release 1.4 | 2026-08-10
+Adds dark mode. Latest stable release.

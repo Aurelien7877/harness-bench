@@ -1,0 +1,2 @@
+from pathlib import Path
+Path('candidate.py').write_text('\n\ndef add(x: int, y: int):\n    """Add two numbers x and y\n    >>> add(2, 3)\n    5\n    >>> add(5, 7)\n    12\n    """\n    return x + y\n')

@@ -12,10 +12,13 @@ import subprocess
 import sys
 import time
 import tomllib
+import urllib.request
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
 from scripts.campaign_results import classify, summarize
+from scripts.llm_proxy import Proxy, summarize_calls
 
 ROOT = Path(__file__).resolve().parent
 HARBOR = ROOT / '.venv/bin/harbor'
@@ -124,7 +127,7 @@ def build_plan(suite, harnesses, models, attempts=1, *, local=False):
     cells = [{'harness': h, 'model': models.get(h), 'task': t, 'attempt': k}
              for k in range(attempts) for t in settings['suites'][suite] for h in harnesses]
     random.Random(settings['seed']).shuffle(cells)
-    cells.sort(key=lambda cell: cell['task'] != 'startup')
+    cells.sort(key=lambda cell: not cell['task'].startswith('startup'))
     paid = sum(c['harness'] not in ('oracle', 'nop') for c in cells)
     if local and any(h not in ('pi', 'opencode', 'droid', 'dsh') for h in harnesses):
         raise ValueError('Local inference supports pi, opencode, droid and dsh')
@@ -159,10 +162,11 @@ def job_config(cell, name, install_only=False, snapshot=None, *, local=False):
     if local:
         context = settings.get('context_window',32768)
         output = settings.get('max_output_tokens',8192)
+        port = settings.get('llm_proxy_port',11434)
         agent['env'] = {'BENCH_LOCAL_KEY': 'ollama'}
         if h in ('droid', 'dsh'):
             agent['skip_model_parsing'] = True
-            agent['kwargs'].update(local_model=cell['model'], local_context=context, local_output=output)
+            agent['kwargs'].update(local_model=cell['model'], local_context=context, local_output=output, local_port=port)
             agent['model_name'] = (
                 'custom:' + cell['model'] + '-0'
                 if h == 'droid' else 'bench-ollama/' + cell['model']
@@ -174,14 +178,14 @@ def job_config(cell, name, install_only=False, snapshot=None, *, local=False):
             agent.update(
                 model_name=provider + '/' + cell['model'],
                 skip_model_parsing=(h == 'opencode'),
-                base_url='http://host.docker.internal:11434/v1',
+                base_url=f'http://host.docker.internal:{port}/v1',
                 model_api_format='openai_chat_completions',
                 model_api_key_name='BENCH_LOCAL_KEY',
             )
         if h == 'pi':
             agent.pop('name',None)
             agent['import_path'] = 'adapters.local_pi:LocalPi'
-            agent['kwargs'].update(local_context=context, local_output=output)
+            agent['kwargs'].update(local_context=context, local_output=output, local_port=port)
         if h == 'opencode':
             agent['kwargs']['opencode_config'] = {
                 'provider': {'bench-local': {'models': {cell['model']: {
@@ -259,6 +263,13 @@ def report(campaign):
             workspace = files[0].parent/'artifacts/workspace'
             if workspace.exists():
                 script = (workspace/'analyze.py').is_file()
+        started = timing.get('started_at')
+        calls = summarize_calls(campaign/(cell['job']+'.calls.jsonl'),
+                                datetime.fromisoformat(started).timestamp() if started else None) or {}
+        reported = [usage.get('n_input_tokens'), usage.get('n_output_tokens')]
+        proxied = [calls.get('proxy_input_tokens'), calls.get('proxy_output_tokens')]
+        source = ('harness' if None not in reported else None if None in proxied else
+                  'proxy' if calls.get('proxy_usage_complete') else 'proxy_partial')
         rows.append({**{k:cell[k] for k in ('harness','model','task','attempt')},
                      'category': cell.get('category', task_meta.get('category')), 'version': (result.get('agent_info') or {}).get('version'),
                      'agent_seconds': elapsed,
@@ -267,8 +278,12 @@ def report(campaign):
                      'script_present':script, 'criteria_json':json.dumps(criteria),
                      'logs':str(files[0].parent) if files else '',
                      'reward': rewards.get('reward'),
-                     'cost_usd': usage.get('cost_usd'), 'input_tokens': usage.get('n_input_tokens'),
-                     'cached_input_tokens': usage.get('n_cache_tokens'), 'output_tokens': usage.get('n_output_tokens'),
+                     'cost_usd': usage.get('cost_usd'),
+                     'input_tokens': reported[0] if source == 'harness' else proxied[0] if source else None,
+                     'cached_input_tokens': usage.get('n_cache_tokens'),
+                     'output_tokens': reported[1] if source == 'harness' else proxied[1] if source else None,
+                     'tokens_source': source,
+                     **{key: calls.get(key) for key in ('llm_calls','tool_calls','first_call_seconds','call_latency_median','ttft_median','llm_seconds')},
                      'result': str(files[0]) if files else ''})
     with (campaign / 'results.csv').open('w', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=list(rows[0]) if rows else ['status'])
@@ -309,14 +324,35 @@ def report(campaign):
               '|---|---|---:|---:|---:|---:|']
     for s in summaries:
         lines.append(f"| {s['harness']} | {s['model']} | {text(s['known_cost_usd'],4)} | {s['cost_observations']}/{s['scheduled']} | {text(s['input_tokens'],0)} ({s['input_tokens_observations']}/{s['scheduled']}) | {text(s['output_tokens'],0)} ({s['output_tokens_observations']}/{s['scheduled']}) |")
-    lines += ['', 'No overall winner is declared. Compare the same tasks, model weights, limits and hardware, then inspect the saved programs and logs.']
+    lines += ['', '| Harness | Model | LLM calls (median) | Tool calls (median) | Time to first call s | Call latency s | TTFT s | Output tokens/s |',
+              '|---|---|---:|---:|---:|---:|---:|---:|']
+    for s in summaries:
+        lines.append(f"| {s['harness']} | {s['model']} | {text(s['llm_calls_median'],0)} | {text(s['tool_calls_median'],0)} | {text(s['first_call_median'])} | {text(s['latency_median'],2)} | {text(s['ttft_median'],2)} | {text(s['tokens_per_second'])} |")
+    lines += ['', 'Call metrics come from a local logging proxy and are unknown when no call was recorded. Time to first call includes harness start-up inside the agent phase.',
+              '', 'No overall winner is declared. Compare the same tasks, model weights, limits and hardware, then inspect the saved programs and logs.']
     (campaign / 'report.md').write_text('\n'.join(lines)+'\n')
     return rows
 
 
-def execute(plan, provider_cap=None, install_only=False, progress=None, settings_override=None):
+def warm_up(tag):
+    """Load the model once so the first trial does not pay the weight-loading time."""
+    request = urllib.request.Request('http://127.0.0.1:11434/api/generate', method='POST',
+                                     data=json.dumps({'model': tag, 'prompt': 'ok', 'stream': False,
+                                                      'options': {'num_predict': 1}, 'keep_alive': '30m'}).encode())
+    try:
+        urllib.request.urlopen(request, timeout=300).read()
+    except OSError:
+        pass  # warm-up is an optimisation; the campaign itself will report real errors
+
+
+def execute(plan, provider_cap=None, install_only=False, progress=None, settings_override=None, resume=None):
     settings, registry = read_config()
     settings.update(settings_override or {})
+    if resume:
+        # Continue with the exact settings and harness versions the campaign started with.
+        saved = json.loads((Path(resume)/'manifest.json').read_text())
+        plan = saved
+        settings, registry = saved['configuration_snapshot']['settings'], saved['configuration_snapshot']['harnesses']
     if settings['timeout_sec'] <= 0 or not 0 < settings['max_output_tokens'] < settings['context_window']:
         raise ValueError('Use a positive timeout and output tokens below the context window.')
     paid = plan['reserved_eur'] > 0 and not install_only
@@ -336,13 +372,14 @@ def execute(plan, provider_cap=None, install_only=False, progress=None, settings
         raise ValueError('Folder near storage limit; archive your runs before continuing')
     if plan.get('local'):
         # /api/tags includes the digest of the locally installed weights.
-        import urllib.request
         with urllib.request.urlopen('http://127.0.0.1:11434/api/tags', timeout=5) as response:
             installed = json.load(response)['models']
         tag = plan['cells'][0]['model']
         record = next((m for m in installed if m['name'] == tag), None)
         if not record or not record.get('size') or record.get('remote_host') or 'cloud' in tag.lower():
             raise ValueError(f'Pull a local Ollama model first: ollama pull {tag}')
+        if resume and plan.get('ollama_digest') != record['digest']:
+            raise ValueError('The installed model differs from the one this campaign started with; start a new campaign.')
         plan['ollama_digest'] = record['digest']
         plan['ollama_runtime'] = {}
         for endpoint in ('version','ps'):
@@ -351,36 +388,70 @@ def execute(plan, provider_cap=None, install_only=False, progress=None, settings
                     plan['ollama_runtime'][endpoint] = json.load(response)
             except OSError:
                 plan['ollama_runtime'][endpoint] = None
-    stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
-    campaign = ROOT / 'runs/campaigns' / stamp
-    campaign.mkdir(parents=True)
-    manifest = dict(copy.deepcopy(plan), state='running', harbor_version=versions['harbor'], runtime_versions=versions, provider_cap_attested_eur=provider_cap, install_only=install_only)
-    manifest['configuration_snapshot'] = {'settings':settings, 'harnesses':registry}
-    manifest['task_file_hashes'] = {
-        str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()
-        for name in {c['task'] for c in manifest['cells']}
-        for p in (ROOT/'tasks'/name).rglob('*') if p.is_file()
-    }
-    image = subprocess.run(['docker','image','inspect','harness-bench-base:1','--format','{{.Id}}'], capture_output=True, text=True, timeout=15, env=runtime_env())
-    manifest['base_image_id'] = image.stdout.strip() if image.returncode == 0 else None
-    for i, cell in enumerate(manifest['cells']):
-        cell['job'] = f'{stamp}-{i:03}-{cell["harness"]}'
-        metadata = tomllib.loads((ROOT/'tasks'/cell['task']/'task.toml').read_text()).get('metadata',{})
-        cell['category'] = metadata.get('category')
-    manifest['config_hashes'] = {p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in (ROOT/'config').glob('*.toml')}
-    write_manifest(campaign, manifest)
-    if progress:
-        progress('campaign', {'path': campaign, 'total': len(manifest['cells'])})
+        warm_up(tag)
+    if resume:
+        campaign, manifest = Path(resume), plan
+        manifest['state'] = 'running'
+        manifest['resumed_at'] = datetime.now(timezone.utc).isoformat()
+        for relative, digest in manifest['task_file_hashes'].items():
+            if hashlib.sha256((ROOT/relative).read_bytes()).hexdigest() != digest:
+                raise ValueError('A task changed since this campaign started; start a new campaign.')
+        write_manifest(campaign, manifest)
+        if progress:
+            progress('campaign', {'path': campaign, 'total': len(manifest['cells'])})
+    else:
+        stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
+        campaign = ROOT / 'runs/campaigns' / stamp
+        campaign.mkdir(parents=True)
+        manifest = dict(copy.deepcopy(plan), state='running', harbor_version=versions['harbor'], runtime_versions=versions, provider_cap_attested_eur=provider_cap, install_only=install_only)
+        manifest['configuration_snapshot'] = {'settings':settings, 'harnesses':registry}
+        manifest['task_file_hashes'] = {
+            str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()
+            for name in {c['task'] for c in manifest['cells']}
+            for p in (ROOT/'tasks'/name).rglob('*') if p.is_file()
+        }
+        image = subprocess.run(['docker','image','inspect','harness-bench-base:1','--format','{{.Id}}'], capture_output=True, text=True, timeout=15, env=runtime_env())
+        manifest['base_image_id'] = image.stdout.strip() if image.returncode == 0 else None
+        for i, cell in enumerate(manifest['cells']):
+            cell['job'] = f'{stamp}-{i:03}-{cell["harness"]}'
+            metadata = tomllib.loads((ROOT/'tasks'/cell['task']/'task.toml').read_text()).get('metadata',{})
+            cell['category'] = metadata.get('category')
+        manifest['config_hashes'] = {p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in (ROOT/'config').glob('*.toml')}
+        write_manifest(campaign, manifest)
+        if progress:
+            progress('campaign', {'path': campaign, 'total': len(manifest['cells'])})
     static_bytes = initial_bytes - folder_bytes(ROOT/'runs')
+    proxy = Proxy(settings['llm_proxy_port']).start() if plan.get('local') else None
     try:
+        broken = Counter()
         for cell in manifest['cells']:
             for relative, digest in manifest['task_file_hashes'].items():
                 if hashlib.sha256((ROOT/relative).read_bytes()).hexdigest() != digest:
                     raise RuntimeError('A task changed during the campaign; stopping to preserve comparability')
+            jobdir = ROOT/'runs/jobs'/cell['job']
+            if resume and cell.get('finished_at'):
+                previous = list(jobdir.glob('*/result.json'))
+                outcome = classify(read_json_object(previous[0]), started=True) if previous else None
+                if outcome in ('passed','incorrect','timeout'):
+                    if progress:
+                        progress('trial_end', dict(cell, result=read_json_object(previous[0]), returncode=cell.get('returncode')))
+                    continue
+            if jobdir.exists():
+                # Keep the earlier attempt's files; the retry gets a clean job folder.
+                archive = ROOT/'runs/jobs/_retried'; archive.mkdir(exist_ok=True)
+                jobdir.rename(archive/(cell['job']+'-'+datetime.now(timezone.utc).strftime('%H%M%S')))
+            if plan.get('local') and broken[cell['harness']] >= 3:
+                cell['skipped'] = 'three consecutive technical errors for this harness'
+                write_manifest(campaign, manifest)
+                if progress:
+                    progress('trial_end', dict(cell, result={}, returncode=None))
+                continue
             config = job_config(cell, cell['job'], install_only, snapshot=(settings, registry), local=plan.get('local', False))
             path = campaign / (cell['job']+'.json')
             path.write_text(json.dumps(config, indent=2))
             cell['started_at'] = datetime.now(timezone.utc).isoformat()
+            if proxy:
+                proxy.log_to(campaign/(cell['job']+'.calls.jsonl'))
             write_manifest(campaign, manifest)
             if progress:
                 progress('trial_start', cell)
@@ -431,6 +502,8 @@ def execute(plan, provider_cap=None, install_only=False, progress=None, settings
                 except OSError:
                     cell['ollama_runtime_after'] = None
             write_manifest(campaign, manifest)
+            broken[cell['harness']] = broken[cell['harness']]+1 if classify(result, started=True) == 'technical_error' else 0
+            report(campaign)  # results.csv and report.md stay current after every trial
             if progress:
                 progress('trial_end', dict(cell, result=result, returncode=process.returncode))
             if process.returncode and not plan.get('local'):
@@ -442,6 +515,8 @@ def execute(plan, provider_cap=None, install_only=False, progress=None, settings
             if not latest or error:
                 raise RuntimeError('Trial infrastructure/agent error; campaign stopped to avoid wasting money')
     finally:
+        if proxy:
+            proxy.stop()
         manifest['state'] = 'interrupted' if sys.exc_info()[0] else 'finished'
         write_manifest(campaign, manifest)
         rows = report(campaign)
@@ -466,6 +541,7 @@ def main():
     p.add_argument('--harness', action='append')
     p.add_argument('--model', default='lfm3:1.7b')
     p.add_argument('--attempts', type=int, default=1)
+    p.add_argument('--resume', type=Path, metavar='CAMPAIGN', help='Continue an interrupted campaign; finished trials are kept')
     p = sub.add_parser('report'); p.add_argument('campaign', type=Path)
     args = parser.parse_args()
     try:
@@ -473,6 +549,8 @@ def main():
         if args.command == 'validate': validate(); return 0
         if args.command == 'report': report(args.campaign); return 0
         if args.command == 'local':
+            if args.resume:
+                return execute(None, resume=args.resume)
             names = args.harness or ['pi', 'opencode']
             models = dict.fromkeys(names, args.model)
             return execute(build_plan(args.suite, names, models, args.attempts, local=True))

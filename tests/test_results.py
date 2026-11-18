@@ -118,3 +118,20 @@ def test_category_plot_handles_missing_categories_and_nonfinite_time():
     assert "N/A" in [t.get_text() for t in tasks.axes[1].texts]
     plt.close(overview)
     plt.close(tasks)
+
+
+def test_efficiency_metrics_are_summarized_and_plotted():
+    matplotlib = pytest.importorskip("matplotlib")
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from scripts.campaign_results import plot_efficiency, summarize, summary_html
+    rows = [trial(llm_calls="4", tool_calls="3", first_call_seconds="2.5", call_latency_median="1.5",
+                  ttft_median="0.5", llm_seconds="6", output_tokens="60", status="passed"),
+            trial(llm_calls="", tool_calls="", status="timeout")]
+    record = summarize(rows)[0]
+    assert (record["llm_calls_median"], record["tool_calls_median"], record["first_call_median"]) == (4, 3, 2.5)
+    assert record["tokens_per_second"] == 10
+    assert "2.5s" in summary_html(rows)
+    figure = plot_efficiency(rows)
+    assert len(figure.axes) == 6
+    plt.close(figure)

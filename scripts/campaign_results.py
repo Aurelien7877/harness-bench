@@ -14,6 +14,10 @@ COLORS = {"passed":"#198754","incorrect":"#d9534f","timeout":"#e5a11a",
 
 def classify(result, *, installed=False, started=False):
     error = result.get("exception_info") or {}
+    rewards = (result.get("verifier_result") or {}).get("rewards") or {}
+    if error and error.get("exception_type") == "NonZeroAgentExitCodeError" and rewards.get("reward") == 1:
+        # The verifier ran on the finished workspace and passed; the CLI only exited badly (e.g. EPIPE on its log pipe).
+        return "passed"
     if error:
         return "timeout" if "timeout" in (error.get("exception_type") or "").lower() else "technical_error"
     if installed and result:
@@ -132,6 +136,16 @@ def summarize(rows):
                       startup_passed=sum(r["status"]=="passed" for r in group if r.get("task")=="startup"),
                       startup_scheduled=sum(r.get("task")=="startup" for r in group),
                       outcomes=dict(Counter(r["status"] for r in work)))
+        def median_of(key):
+            values = [v for r in work if (v:=number(r.get(key))) is not None]
+            return statistics.median(values) if values else None
+        timed = [r for r in work if number(r.get("output_tokens")) is not None and number(r.get("llm_seconds"))]
+        seconds = sum(number(r["llm_seconds"]) for r in timed)
+        record.update(llm_calls_median=median_of("llm_calls"), tool_calls_median=median_of("tool_calls"),
+                      first_call_median=median_of("first_call_seconds"),
+                      latency_median=median_of("call_latency_median"), ttft_median=median_of("ttft_median"),
+                      call_observations=sum(number(r.get("llm_calls")) is not None for r in work),
+                      tokens_per_second=sum(number(r["output_tokens"]) for r in timed)/seconds if seconds else None)
         for key in ("input_tokens","output_tokens"):
             values = [v for r in group if (v:=number(r.get(key))) is not None]
             record[key] = sum(values) if values else None
@@ -184,9 +198,14 @@ def summary_html(rows):
         tokens = []
         for key in ("input_tokens","output_tokens"):
             tokens.append("unknown" if r[key] is None else f'{r[key]:,.0f} ({r[key+"_observations"]}/{r["scheduled"]})')
-        values = (r["harness"],r["model"],rate,interval,r["distinct_tasks"],time,cost,*tokens,startup)
+        def metric(key, digits=1, suffix=""):
+            return "unknown" if r[key] is None else f'{r[key]:.{digits}f}{suffix}'
+        calls = f'{metric("llm_calls_median",0)} / {metric("tool_calls_median",0)}'
+        values = (r["harness"],r["model"],rate,interval,r["distinct_tasks"],time,calls,
+                  metric("first_call_median",1,"s"),metric("ttft_median",2,"s"),metric("latency_median",2,"s"),
+                  metric("tokens_per_second",1),cost,*tokens,startup)
         table.append("<tr>"+"".join("<td>"+text(value)+"</td>" for value in values)+"</tr>")
-    headings = ("Harness","Model","Work success","95% interval*","Work tasks","Median time (coverage)","Known USD cost (coverage)","Input tokens (coverage)","Output tokens (coverage)","Startup")
+    headings = ("Harness","Model","Work success","95% interval*","Work tasks","Median time (coverage)","Median LLM / tool calls","Median time to first call","Median TTFT","Median call latency","Output tokens/s","Known USD cost (coverage)","Input tokens (coverage)","Output tokens (coverage)","Startup")
     return ('<style>.hb-table{border-collapse:collapse;font:13px system-ui;width:100%;color:#152c45;background:white;}'
             '.hb-table th{background:#152c45;color:white;text-align:left;}'
             '.hb-table td,.hb-table th{padding:10px;border-bottom:1px solid #dce4ee;}'
@@ -319,4 +338,37 @@ def plot_task_results(rows):
                         color="white" if not np.isnan(value) and value>=65 else "#152c45")
         ax.set_title(title)
     fig.suptitle("Success by task mix · counts are passed / scheduled",fontsize=15,fontweight="bold",color="#152c45")
+    return fig
+
+
+def plot_efficiency(rows):
+    """Calls, time to first call, latency and throughput per configuration; unknown stays blank."""
+    import matplotlib.pyplot as plt
+    keys = _configurations(rows)
+    if not keys:
+        raise ValueError("The campaign has no scheduled trials.")
+    labels = [_label(key,keys) for key in keys]
+    records = {(r["harness"],r["model"]):r for r in summarize(rows)}
+    panels = (("llm_calls_median","Median LLM calls per trial","calls","#387ca6"),
+              ("tool_calls_median","Median tool calls per trial","calls","#8763b5"),
+              ("first_call_median","Median time to first call","seconds","#e5a11a"),
+              ("ttft_median","Median time to first token (per call)","seconds","#198754"),
+              ("latency_median","Median call latency","seconds","#d9534f"),
+              ("tokens_per_second","Output tokens per second of model time","tokens/s","#152c45"))
+    fig,grid = plt.subplots(2,3,figsize=(15,7),layout="constrained")
+    for ax,(key,title,unit,color) in zip(grid.flat,panels):
+        for i,(harness,model) in enumerate(keys):
+            value = records[(harness,model)][key]
+            if value is None:
+                ax.text(0,i,"unknown",va="center",color="#7c8998")
+            else:
+                ax.barh(i,value,color=color,alpha=0.9)
+                ax.text(value,i,f" {value:.1f}",va="center")
+        ax.set_yticks(range(len(keys)),labels)
+        ax.invert_yaxis()
+        ax.set_xlim(0,max(1,ax.get_xlim()[1]*1.2))
+        ax.set_title(title)
+        ax.set_xlabel(unit)
+        ax.spines[["top","right"]].set_visible(False)
+    fig.suptitle("Efficiency · measured by a local proxy on every model call",fontsize=15,fontweight="bold",color="#152c45")
     return fig

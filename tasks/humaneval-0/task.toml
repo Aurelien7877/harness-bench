@@ -5,7 +5,7 @@ author_name = "Personal harness benchmark"
 difficulty = "easy"
 source = "openai/human-eval HumanEval/0; MIT"
 [agent]
-timeout_sec = 180
+timeout_sec = 600
 [verifier]
 timeout_sec = 30
 [environment]

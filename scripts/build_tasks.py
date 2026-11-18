@@ -24,7 +24,7 @@ author_name = "Personal harness benchmark"
 difficulty = "easy"
 source = "{provenance}"
 [agent]
-timeout_sec = 180
+timeout_sec = 600
 [verifier]
 timeout_sec = 30
 [environment]
@@ -102,9 +102,9 @@ def pipeline_task(name, category, prompt, filename, initial, hidden, program, ex
 def main():
     archive = ROOT / "vendor/humaneval/HumanEval.jsonl.gz"
     rows = [json.loads(line) for line in gzip.decompress(archive.read_bytes()).decode().splitlines()]
-    manifest = {"source": "https://github.com/openai/human-eval", "downloaded": "2026-11-04", "archive_sha256": hashlib.sha256(archive.read_bytes()).hexdigest(), "ids": ["HumanEval/0", "HumanEval/12"], "license": "MIT", "adaptation": "File-based agent task. Original tests and canonical solution retained. Not an official HumanEval score."}
+    manifest = {"source": "https://github.com/openai/human-eval", "downloaded": "2026-11-04", "archive_sha256": hashlib.sha256(archive.read_bytes()).hexdigest(), "ids": ["HumanEval/0", "HumanEval/12", "HumanEval/53"], "license": "MIT", "adaptation": "File-based agent task. Original tests and canonical solution retained. Not an official HumanEval score."}
     write(ROOT / "vendor/humaneval/provenance.json", json.dumps(manifest, indent=2) + "\n")
-    for index in [0, 12]:
+    for index in [0, 12, 53]:
         row = next(r for r in rows if r['task_id'] == f'HumanEval/{index}')
         starter = row['prompt'] + "    raise NotImplementedError\n"
         complete = row['prompt'] + row['canonical_solution']
@@ -212,6 +212,63 @@ Path(sys.argv[2]).write_text(json.dumps({'balances':balances,'unapplied_credit':
         "import json, sys\nfrom pathlib import Path\nnumbers=json.loads(Path(sys.argv[1]).read_text())\nPath(sys.argv[2]).write_text(json.dumps({'count':len(numbers),'sum':sum(numbers)}))\n",
         [{'count':3,'sum':10}, {'count':4,'sum':7}, {'count':0,'sum':0}],
     )
+
+    # Easy tier: small tasks a modest local model can complete, three per category.
+    pipeline_task(
+        'startup-wordcount', 'startup',
+        'Read a text file that may be empty. Write a reusable script that returns the number of whitespace-separated words and the number of lines.',
+        'text.txt', 'the quick brown fox\njumps over\n', ['', 'one\n\n  two  \n'],
+        "import json, sys\nfrom pathlib import Path\ntext=Path(sys.argv[1]).read_text()\nPath(sys.argv[2]).write_text(json.dumps({'words':len(text.split()),'lines':len(text.splitlines())}))\n",
+        [{'words':6,'lines':2}, {'words':0,'lines':0}, {'words':2,'lines':3}],
+    )
+    json_task("startup-greeting", "startup", "Read name.txt and return greeting, the text Hello, followed by a comma, a space, the name from the file and an exclamation mark.", {"name.txt": "Ada\n"}, {"greeting": "Hello, Ada!"})
+
+    docs = {"notes-a.txt": "Release 1.2 | 2026-03-05\nAdds CSV export.\n", "notes-b.txt": "Release 1.4 | 2026-08-10\nAdds dark mode. Latest stable release.\n", "notes-c.txt": "Release 1.3 | 2026-06-20\nFixes login bugs.\n"}
+    json_task("research-latest", "research", "Three release-note files are supplied, in no particular order. Return latest_version (the highest release number, as text) and released (its date as YYYY-MM-DD text).", docs, {"latest_version": "1.4", "released": "2026-08-10"})
+    licenses = {"S1.txt": "S1 | Vendor page\nCedar is proprietary software. Evaluation licence only.\n", "S2.txt": "S2 | Project repository\nMaple is released under the MIT licence.\n", "S3.txt": "S3 | Vendor page\nOak is released under a commercial licence.\n"}
+    json_task("research-source", "research", "Three short source files describe three fictional libraries. Find the library released under the MIT licence. Return library (its name) and source_id (the source ID that says so).", licenses, {"library": "Maple", "source_id": "S2"})
+
+    expenses = 'category,amount_cents\nfood,1250\ntravel,9000\nfood,750\ntravel,500\noffice,9500\n'
+    pipeline_task(
+        'general-expenses', 'general',
+        'Read expenses.csv, which may have no rows. Amounts are integer cents. Return total_cents, the number of expense rows as count, and top_category, the category with the largest total (alphabetically first on ties, empty string if no rows).',
+        'expenses.csv', expenses, ['category,amount_cents\n', 'category,amount_cents\nb,100\na,100\nb,0\n'],
+        "import csv, json, sys\nfrom pathlib import Path\nrows=list(csv.DictReader(open(sys.argv[1])))\ntotals={}\nfor r in rows: totals[r['category']]=totals.get(r['category'],0)+int(r['amount_cents'])\ntop=sorted(totals,key=lambda c:(-totals[c],c))[0] if totals else ''\nPath(sys.argv[2]).write_text(json.dumps({'total_cents':sum(totals.values()),'count':len(rows),'top_category':top}))\n",
+        [{'total_cents':21000,'count':5,'top_category':'office'}, {'total_cents':0,'count':0,'top_category':''}, {'total_cents':200,'count':3,'top_category':'a'}],
+    )
+    pipeline_task(
+        'general-contacts', 'general',
+        'Read contacts.json, a list of email strings that may be empty. Two emails are the same when they match after trimming spaces and lowercasing. Return unique, the number of distinct emails, and duplicates, the number of discarded repeats.',
+        'contacts.json', json.dumps(['a@example.com', 'B@example.com ', 'b@example.com', 'c@example.com']), [json.dumps([]), json.dumps([' X@example.org', 'x@example.org', 'X@EXAMPLE.ORG'])],
+        "import json, sys\nfrom pathlib import Path\nitems=[e.strip().lower() for e in json.loads(Path(sys.argv[1]).read_text())]\nPath(sys.argv[2]).write_text(json.dumps({'unique':len(set(items)),'duplicates':len(items)-len(set(items))}))\n",
+        [{'unique':3,'duplicates':1}, {'unique':0,'duplicates':0}, {'unique':1,'duplicates':2}],
+    )
+
+    log = "".join(f"Log {i}: heartbeat ok.\n" for i in range(150)) + "NOTICE: the access code is 7413-KX.\n" + "".join(f"Log {i}: heartbeat ok.\n" for i in range(150, 300))
+    json_task("context-needle", "context", "Find the single access code stated in log.txt. Return access_code as text, exactly as written.", {"log.txt": log}, {"access_code": "7413-KX"})
+    notes = "2026-01-10: Contact email is old@example.com.\n" + "".join(f"Note {i}: nothing changed.\n" for i in range(100)) + "2026-05-02: Contact email changed to new@example.com.\n" + "".join(f"Note {i}: nothing changed.\n" for i in range(100, 150))
+    json_task("context-contact", "context", "Return the current contact email from notes.txt as email, and the date the current value was set as since (YYYY-MM-DD). Later explicit changes replace earlier values.", {"notes.txt": notes}, {"email": "new@example.com", "since": "2026-05-02"})
+
+    fib70 = 0
+    a, b = 0, 1
+    for _ in range(70):
+        a, b = b, a + b
+    fib70 = a
+    digit_count = sum(1 for n in range(1, 300001) if n % 7 == 0 and sum(map(int, str(n))) == 20)
+    sieve = [True] * 100002
+    sieve[0] = sieve[1] = False
+    for i in range(2, 317):
+        if sieve[i]:
+            for j in range(i * i, 100002, i):
+                sieve[j] = False
+    primes = [i for i in range(100000) if sieve[i]]
+    twin = max(p for p in primes if sieve[p + 2])
+
+    # Math tier. Large exact computations that a small model rarely gets right unaided,
+    # so the result depends on whether the harness lets and pushes it to run code (PAL / PoT).
+    json_task("math-word", "math", "Maya has 50 EUR. She buys 4 notebooks at 3.50 EUR each and 6 pens at 0.75 EUR each. Return change_eur (money left, a number) and items (how many things she bought, an integer).", {"problem.txt": "Maya has 50 EUR. She buys 4 notebooks at 3.50 EUR each and 6 pens at 0.75 EUR each.\n"}, {"change_eur": 50 - 4*3.5 - 6*0.75, "items": 10})
+    json_task("math-bignum", "math", "Compute exactly: product = 48271 * 69313; power_mod = the remainder of 3 to the power 2026 divided by 1000007; fibonacci_70 = the 70th Fibonacci number with fib(1)=1 and fib(2)=1. Return them as integers. Use the shell or Python to compute; do not estimate.", {"README.txt": "Exact integer arithmetic. Python 3 is installed.\n"}, {"product": 48271 * 69313, "power_mod": pow(3, 2026, 1000007), "fibonacci_70": fib70})
+    json_task("math-count", "math", "Using code, count: digit_sum_20 = the integers n with 1 <= n <= 300000 whose decimal digits sum to 20 and that are divisible by 7; primes_below_100000 = the number of primes below 100000; twin_prime_below_100000 = the largest p below 100000 such that p and p+2 are both prime. Return integers. Use the shell or Python; do not estimate.", {"README.txt": "Counting with code. Python 3 is installed.\n"}, {"digit_sum_20": digit_count, "primes_below_100000": len(primes), "twin_prime_below_100000": twin})
     print(f"Prepared {len(list(TASKS.iterdir()))} Harbor tasks")
 
 

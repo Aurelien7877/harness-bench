@@ -1,0 +1,2 @@
+S2 | Project repository
+Maple is released under the MIT licence.

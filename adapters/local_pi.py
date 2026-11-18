@@ -1,9 +1,17 @@
 """Pi's upstream adapter with explicit local model limits."""
-from harbor.agents.installed.pi import Pi
+from harbor.agents.installed.pi import Pi, PiOptions
+
+
+class LocalPiOptions(PiOptions):
+    local_context: int = 32768
+    local_output: int = 8192
+    local_port: int = 11434
 
 
 class LocalPi(Pi):
-    def __init__(self, *args, local_context=32768, local_output=8192, **kwargs):
+    options_model = LocalPiOptions
+
+    def __init__(self, *args, local_context=32768, local_output=8192, local_port=11434, **kwargs):
         self.local_context = local_context
         self.local_output = local_output
         super().__init__(*args, **kwargs)

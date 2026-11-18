@@ -20,7 +20,8 @@ def test_budget_rejects_oversized_campaign():
 def test_small_plan_reproducible_and_free_oracle():
     a = bench.build_plan('quick', ['omp','pi'], {}, 1)
     assert a == bench.build_plan('quick', ['omp','pi'], {}, 1)
-    assert a['runs'] == 12 and a['reserved_eur'] == 12
+    runs = 2*len(bench.read_config()[0]['suites']['quick'])
+    assert a['runs'] == runs and a['reserved_eur'] == runs
     assert bench.build_plan('full', ['oracle','nop'], {}, 2)['reserved_eur'] == 0
 
 
@@ -47,7 +48,7 @@ def test_grader_accepts_oracle_rejects_missing_and_wrong(name, tmp_path):
         (tmp_path/'answer.json').write_text(json.dumps(answer))
     else:
         text = (tmp_path/'candidate.py').read_text()
-        (tmp_path/'candidate.py').write_text(text + '\n' + "def " + ('has_close_elements' if name=='humaneval-0' else 'longest') + "(*args, **kwargs): raise RuntimeError('bad')\n")
+        (tmp_path/'candidate.py').write_text(text + '\n' + "def " + {'humaneval-0':'has_close_elements','humaneval-12':'longest','humaneval-53':'add'}[name] + "(*args, **kwargs): raise RuntimeError('bad')\n")
     assert subprocess.run(check, cwd=tmp_path, env=env, capture_output=True, timeout=10).returncode != 0
 
 
@@ -93,7 +94,8 @@ def test_local_pair_uses_same_weights_and_no_provider_credential(monkeypatch):
     assert plan['reserved_eur'] == 0
     for cell in plan['cells']:
         agent = bench.job_config(cell, 'local-test', local=True)['agents'][0]
-        assert agent['base_url'] == 'http://host.docker.internal:11434/v1'
+        port = bench.read_config()[0]['llm_proxy_port']
+        assert agent['base_url'] == f'http://host.docker.internal:{port}/v1'
         assert agent['model_name'].endswith('/qwen3:4b')
         assert agent['env'] == {'BENCH_LOCAL_KEY': 'ollama'}
         if cell['harness'] == 'opencode':
@@ -112,6 +114,9 @@ def test_timeout_keeps_its_status_even_with_a_zero_grade():
     assert classify(result) == "timeout"
     assert classify({"verifier_result":{"rewards":{"reward":0}}}) == "incorrect"
     assert classify({}) == "not_run"
+    crashed = {"exception_info": {"exception_type": "NonZeroAgentExitCodeError"}}
+    assert classify({**crashed, "verifier_result": {"rewards": {"reward": 1}}}) == "passed"
+    assert classify({**crashed, "verifier_result": {"rewards": {"reward": 0}}}) == "technical_error"
 
 
 def test_startup_runs_before_analysis():

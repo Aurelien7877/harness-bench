@@ -5,7 +5,7 @@ author_name = "Personal harness benchmark"
 difficulty = "easy"
 source = "personal-v3; synthetic data; held-out inputs"
 [agent]
-timeout_sec = 180
+timeout_sec = 600
 [verifier]
 timeout_sec = 30
 [environment]

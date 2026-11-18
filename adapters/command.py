@@ -13,11 +13,12 @@ class CommandAgent(BaseAgent):
     package = ""
     binary = ""
 
-    def __init__(self, *args, version, local_model=None, local_context=32768, local_output=8192, **kwargs):
+    def __init__(self, *args, version, local_model=None, local_context=32768, local_output=8192, local_port=11434, **kwargs):
         super().__init__(*args, **kwargs)
         self.local_model = local_model
         self.local_context = local_context
         self.local_output = local_output
+        self.local_port = local_port
         self.pin = version
         self.detected_version = None
 
@@ -152,7 +153,7 @@ class Droid(CommandAgent):
         settings = {"customModels": [{
             "model": self.local_model,
             "displayName": "Local Ollama",
-            "baseUrl": "http://host.docker.internal:11434/v1",
+            "baseUrl": f"http://host.docker.internal:{self.local_port}/v1",
             "apiKey": "ollama",
             "provider": "generic-chat-completion-api",
             "maxOutputTokens": self.local_output,
@@ -187,13 +188,13 @@ class DSH(CommandAgent):
         (self.logs_dir/'default-config.yml').write_text(result.stdout or '')
 
     async def prepare(self, environment):
-        patch = self.model_patch(self.model_name, local_model=self.local_model, context=self.local_context, output=self.local_output)
+        patch = self.model_patch(self.model_name, local_model=self.local_model, context=self.local_context, output=self.local_output, port=self.local_port)
         path = self.logs_dir / "model.patch.yml"
         path.write_text(json.dumps(patch))
         await environment.upload_file(source_path=path, target_path="/tmp/bench-model.patch.yml")
 
     @staticmethod
-    def model_patch(model_name, *, local_model=None, context=32768, output=8192):
+    def model_patch(model_name, *, local_model=None, context=32768, output=8192, port=11434):
         provider, sep, model = model_name.partition("/")
         if not sep or not model:
             raise ValueError("DSH model must be provider/model")
@@ -208,7 +209,7 @@ class DSH(CommandAgent):
                 'config': {'providers': {'bench-ollama': {
                     'api': 'openai-completions',
                     'apiKeyEnv': 'BENCH_LOCAL_KEY',
-                    'baseURL': 'http://host.docker.internal:11434/v1',
+                    'baseURL': f'http://host.docker.internal:{port}/v1',
                     'retryPolicy': {'mode': 'normal', 'maxRetries': 0},
                     'models': [{'id': local_model, 'contextWindow': context,
                                 'maxTokens': output}],

@@ -1,6 +1,6 @@
 # Harness Bench
 
-**A very small benchmark to find the harness you need.**
+**A very small local benchmark to find, or tune, the harness you need.**
 
 ![Abstract violet, blue and mint waves made from tiny ASCII characters](assets/harness-bench.svg)
 
@@ -9,15 +9,41 @@
 [![Local inference with Ollama](https://img.shields.io/badge/local_inference-Ollama-16765f?style=flat-square)](#try-the-local-demo)
 [![Open the Python notebook](https://img.shields.io/badge/Jupyter-open_notebook-b54f20?style=flat-square)](notebooks/local-comparison.ipynb)
 [![Seven harness configurations](https://img.shields.io/badge/harnesses-7-514d9b?style=flat-square)](config/harnesses.toml)
-[![Nine graded tasks](https://img.shields.io/badge/graded_tasks-9-275f85?style=flat-square)](#inside-the-benchmark)
+[![Twenty-one graded tasks](https://img.shields.io/badge/graded_tasks-21-275f85?style=flat-square)](#inside-the-benchmark)
 
 Choosing an AI agent harness? Start with a few tasks you care about. Compare how agents handle Python, data science, research and everyday work, then inspect their outputs, runtime and failures to decide what fits your workflow.
 
-Nine tasks, a Python notebook and a local Ollama demo get you started. Pi and OpenCode receive the same model, input files and time limit. Add another harness or bring your own tasks as your needs change.
+Twenty-one tasks (three per category across seven categories, each with an easy one a small local model can pass), a Python notebook and a local Ollama demo get you started. Pi and OpenCode receive the same model, input files and time limit. Add another harness or bring your own tasks as your needs change.
 
 The demo starts with a small file and Python check, then asks each harness to evaluate two search systems. All agents see one set of rankings. The grader checks the saved answer, reruns each Python program and checks two additional sets of rankings. You can inspect the programs alongside the scores.
 
-[Open the notebook](notebooks/local-comparison.ipynb) · [Try the local demo](#try-the-local-demo) · [Browse the tasks](tasks) · [Add a harness](#extend-the-benchmark)
+[Open the notebook](notebooks/local-comparison.ipynb) · [Try the local demo](#try-the-local-demo) · [Browse the tasks](tasks) · [Tune your own harness](#tune-your-own-harness) · [Add a harness](#extend-the-benchmark)
+
+## The question
+
+**Same model, same tasks, same container: how much of an agent's result comes from the harness?**
+
+A model is rarely used alone. It sits inside a harness that writes its prompt, picks its tools, decides when to stop and what to remember. Two harnesses can run the identical model weights and still differ in success, in cost and in how long you wait for the first action. Public leaderboards usually change the model and the harness at the same time, so the harness effect stays hidden.
+
+Harness Bench isolates it. Every harness gets the same local model, the same input files, the same time limit and a fresh container. A local proxy then measures each model call the same way for all of them. We ask three things:
+
+1. **Does it work?** Pass rate on 21 graded tasks, with errors and timeouts counted as failures.
+2. **How much does it cost?** Tokens, model calls and tool calls per task.
+3. **How fast does it feel?** Time to first call, time to first token and latency per call.
+
+This is a screening tool, not a leaderboard. Samples are small and tasks are handpicked, so read it as a way to decide which harness deserves a longer test on *your* work.
+
+## Tune your own harness
+
+The best harness is the one tuned on *your* work, not the one that tops someone else's leaderboard. Harness Bench is built to be that loop on your own machine: your tasks, a local model, no account and no data leaving the laptop.
+
+1. **Write your tasks.** Copy a [task](tasks) folder: an instruction, input files, a reference solution and a check script. Five to ten real chores of yours beat twenty-one generic ones. Register them in a [suite](config/bench.toml).
+2. **Get a baseline.** Run `./bench local --suite mine --harness pi` (or any harness above) and read the pass rate, calls and latency.
+3. **Make your harness a registry entry.** Your *self harness* is a CLI plus the choices around it: system prompt, tools, step limit, model, version. Add it from the [registry example](config/new-harness.example.toml), either as a Harbor adapter or as a small class in [adapters/command.py](adapters/command.py) that implements `argv()` and, if needed, `prepare()`.
+4. **Change one thing at a time.** Give each variant its own registry name (`mine-short-prompt`, `mine-no-edit-tool`, `mine-8-steps`) and run the same suite with the same model. The notebook's matched comparison shows which variant wins on the same task and attempt.
+5. **Keep what wins, then check it.** Hold a few tasks back from tuning and run them last. A variant that only improves the tasks you tuned on is overfitting, not progress.
+
+The loop is manual today: Harness Bench measures and compares, you decide what to change. The measures it adds to a pass rate (calls, tool calls, time to first call, tokens) tell you *why* a variant is better, for instance fewer wasted calls or a faster start, so you can tune toward the failure you actually have.
 
 ## Try the local demo
 
@@ -39,14 +65,15 @@ The last line **previews the command**. When you are ready to run the demo with 
 
 | Category | Tasks | What the grader checks |
 |---|---:|---|
-| Startup | 1 | Read a file, write a script and calculate a count and sum, including an empty input. Scored separately. |
-| Python coding | 2 | Two [HumanEval](https://github.com/openai/human-eval) functions pass their original tests. |
+| Startup | 3 | Read a file, write a script and calculate a count and sum; count words; write a greeting. Scored separately. |
+| Python coding | 3 | Three [HumanEval](https://github.com/openai/human-eval) functions pass their original tests, one of them trivial. |
 | Data science | 3 | A sales aggregation handles duplicates and refunds. A retrieval script computes recall@3 and MRR@3. A leakage audit identifies features that use future information. |
-| Research | 1 | A recommendation cites the authoritative sources in a small collection of conflicting reports. |
-| General work | 1 | Invoice balances reconcile after partial payments, duplicated records and excess credit. |
-| Context retrieval | 1 | The agent recovers the latest budget and region from a file of revised instructions. |
+| Research | 3 | A recommendation cites the authoritative sources in conflicting reports; find the latest release; find the MIT-licensed library. |
+| General work | 3 | Invoice balances reconcile after partial payments and duplicates; expenses are totalled by category; emails are deduplicated. |
+| Math | 3 | A word problem, then two exact computations (large arithmetic, counting and primes) that a small model rarely gets right without running code. |
+| Context retrieval | 3 | The agent recovers the latest budget and region from revised instructions, an access code from a long log, and the current contact email. |
 
-Pick `demo` for **2 tasks**, `smoke` for **3**, `quick` for **6** or `full` for **9**. For example, this previews **24 trials** across two harnesses, six tasks and two attempts.
+Pick `demo` for **2 tasks**, `smoke` for **3**, `quick` for **8**, `math` for **3** or `full` for **21**. For example, this previews **32 trials** across two harnesses, eight tasks and two attempts.
 
 ```sh
 python3 scripts/local_comparison.py --suite quick --attempts 2
@@ -59,15 +86,17 @@ model = "lfm3:1.7b"
 harnesses = ["pi", "opencode", "droid", "dsh"]
 ```
 
-The local routes for Droid 1.6.0 and DeepSeek Harness 0.2.2-rc.1 use Ollama's Chat Completions endpoint. They have configuration and unit checks. This repository does not claim successful model execution for every adapter, CLI or model combination. Droid may request Factory authentication depending on its CLI and account requirements. The pinned versions live in the registry so each experiment records a specific version.
+The local routes for Droid 1.14.0 and DeepSeek Harness 0.2.2-rc.1 use Ollama's Chat Completions endpoint. All four local harnesses completed the two-task `demo` suite with `lfm3:1.7b`; this repository does not claim successful execution for other tasks, CLIs or models. Droid may request Factory authentication depending on its CLI and account requirements. The pinned versions live in the registry so each experiment records a specific version.
 
 The notebook preparation cell refreshes stale execution dependencies before a new campaign. For terminal use after a repository update, `make setup-python` synchronizes those dependencies without building images or running a model. Existing reports remain readable; the launcher rejects stale execution libraries.
+
+**Interrupted?** Every trial is saved as soon as it ends, and `results.csv` and `report.md` are refreshed after each one. Resume with `./bench local --resume runs/campaigns/CAMPAIGN_ID`: finished trials are kept, interrupted or technically failed ones are rerun (their earlier files move to `runs/jobs/_retried`). A resumed campaign keeps its original settings and harness versions, and refuses to continue if a task or the model weights changed. A harness with three consecutive technical errors is skipped for the rest of the campaign instead of wasting hours.
 
 ## Read the results
 
 **Startup is a health check, not part of the work score.** A passing work trial must satisfy every required check. Diagnostics explain failures without turning them into partial successes.
 
-Open the `report.md` path printed when the campaign finishes. Use `results.csv` to compare the same task and attempt across harnesses. It includes the grade, status, agent time and available token counts. Blank usage fields mean the harness did not report that value. The manifest records the task hashes, model digest for Ollama runs, and configuration used for the campaign.
+Open the `report.md` path printed when the campaign finishes. Use `results.csv` to compare the same task and attempt across harnesses. It includes the grade, status, agent time, tokens, LLM calls, tool calls, time to first call, call latency and time to first token. Blank fields mean the value was not measured. Local campaigns route every harness through a logging proxy (`llm_proxy_port` in `config/bench.toml`, default 11436), so calls, latency and tokens are measured the same way for all harnesses. Token counts come from the harness when it reports them, otherwise from the proxy (`tokens_source`; `proxy_partial` means some calls reported no usage, so the total is a lower bound). Time to first call runs from the start of the agent phase and includes harness start-up. The manifest records the task hashes, model digest for Ollama runs, and configuration used for the campaign.
 
 The notebook includes a compact summary table, 0% labels, exploratory 95% intervals, category and task heatmaps, and same-model matched outcomes. Token and cost totals show their measurement coverage. Unknown values stay unknown. See [how to interpret the statistics](docs/methodology.md).
 
@@ -75,11 +104,51 @@ If one agent passes and another fails, open both workspaces. Check whether the f
 
 ## Supported harnesses
 
+The four harnesses compared in local campaigns. The first rows come from the npm metadata of each pinned version and from tool calls observed in our trials; the rows from "Non-interactive mode" down come from the official documentation.
+
+| | **Pi** | **OpenCode** | **Factory Droid** | **DeepSeek Harness (dsh)** |
+|---|---|---|---|---|
+| Pinned version | 1.5.2 | 1.19.6 | 1.14.0 | 0.2.2-rc.1 |
+| npm package | `@earendil-works/pi-coding-agent` (legacy name for older versions) | `opencode-ai` | `@factory/cli` | `@deepseek-ai/dsh` |
+| License | MIT | MIT | Proprietary (`UNLICENSED`) | MIT |
+| Runtime declared upstream | Node ≥ 22.19 | Native binary | Node ≥ 20 | Node ≥ 24.9 |
+| Integration here | Upstream Harbor adapter (`LocalPi` wrapper for local limits) | Upstream Harbor adapter | [Local CLI adapter](adapters/command.py) | [Local CLI adapter](adapters/command.py) |
+| Local model route | OpenAI-compatible endpoint | OpenAI-compatible custom provider | Custom model, Chat Completions | Custom provider, `openai-completions` |
+| Tools seen in trials | `read`, `bash`, `edit`, `write` | `read`, `bash`, `edit`, `write` | `Read`, `Execute`, `Edit`, `Create` | `read`, `glob`, `bash`, `edit`, `write` |
+| Token usage reported by the harness | Yes | Yes | No | No (the proxy fills it) |
+| Account needed for local use | No | No | May ask for Factory authentication | No |
+| Result trace | Harbor trajectory with step timestamps | Harbor trajectory with step timestamps | Native event stream | Native event stream, profile-based config |
+| Non-interactive mode | `-p` (print), `--mode json` (JSONL events) | `opencode run "<prompt>"` | `droid exec`, `--auto low\|medium\|high`, stream-json output | `--profile headless`, final answer on stdout |
+| Permission model | None built in: runs with the user's rights, containerization recommended | Ordered allow/ask/deny rules per action and resource | Autonomy levels (off, low, medium, high), permission rules, secret scanning | `workspace-write` sandbox by default; reads and network not confined |
+| Subagents | Not built in (add by extension) | Built in (`general`, `explore`, custom agents) | Built in (`worker`, `explorer`, custom droids) | Optional Codex / Claude Code subagent bundles |
+| MCP | stdio and streamable HTTP; tools exposed through a `codemode` layer by default | stdio and remote with OAuth | stdio, HTTP and legacy SSE | Off by default; servers treated as trusted code |
+| Context compaction | Automatic, plus `/compact` | Automatic, configurable | `/compress`, token limits in settings | Automatic in the `minimal` agent preset, plus `/compact` |
+| Extensibility | Extensions, skills, prompt templates, Pi packages | Plugins, skills, commands, agents | Hooks, skills, plugins, custom droids | Everything is a plugin; profiles are stacks of patch layers |
+| Data leaving the machine | `/share` and `/bug` only when you run them | Not stated in the pages read | Cloud session sync on by default | Session-log upload (official DeepSeek API) and OTel upload on by default; we set `DSH_TELEMETRY_DISABLED=1` |
+| Maturity | Not stated (its separate Radius gateway is in early alpha) | Stable v1 pinned here; the online docs describe v2 | Commercial product | Developer preview, "compatibility-breaking changes" expected |
+
+**Sources and caveats.** Rows from "Non-interactive mode" down come from the official documentation read on 18 November 2026: [Pi](https://github.com/earendil-works/pi), [OpenCode](https://opencode.ai/docs), [Factory Droid](https://docs.factory.com) and [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). Not every page was read.
+
+- **OpenCode:** the online docs describe v2 (`@opencode/cli`, a `shell` tool, `permissions`). This benchmark pins v1.19.6, which exposes `bash` and `opencode-ai`, so details may differ for the pinned version. The license row comes from npm, since no docs page stated it.
+- **Droid:** the docs name the npm package `droid`; we pin `@factory/cli` 1.14.0. The docs did not confirm local OpenAI-compatible endpoints; our trials worked with a custom model entry. The docs state "All rights reserved", consistent with the proprietary license in npm.
+- **dsh:** the docs do not mention the `--json`, `--permission-mode` and `--approval-policy` flags that the adapter passes to 0.2.2-rc.1, and the version itself is not stated there. The flags worked in our trials; treat them as specific to the pinned release candidate.
+- **Pi:** the local-endpoint page (`models.md`) was not read; local use is confirmed by our trials, not by the pages read.
+
+**First observations**, from the two-task `demo` suite on `lfm3:1.7b` (startup and `humaneval-53`, one attempt each, all four harnesses passed both). With two trials per harness this describes behavior, not a ranking.
+
+| | Pi | OpenCode | Droid | dsh |
+|---|---:|---:|---:|---:|
+| Tasks passed | 2/2 | 2/2 | 2/2 | 2/2 |
+| Model calls per task | 6 and 4 | 7 and 5 | 8 and 6 | 13 and 16 |
+| Time to first call | 0.8 s | 1.1 to 1.2 s | 4.2 to 7.7 s | 1.3 to 1.5 s |
+
+dsh makes the most calls for the same tasks, and Droid waits longest before its first call. The `full` suite and several attempts are needed before concluding anything.
+
+Other harnesses supported by the launcher:
+
 | Harnesses | Integration | Inference covered by the launcher |
 |---|---|---|
-| Pi and OpenCode | [Harbor](https://github.com/harbor-framework/harbor) adapters | Ollama and hosted models |
 | Claude Code and Codex | Harbor adapters | Hosted models |
-| Factory Droid and DeepSeek Harness | [CLI adapters](adapters/command.py) | Ollama configuration added, execution pending validation |
 | Oh My Pi (OMP) | CLI adapter | Hosted configurations |
 
 See the [harness registry](config/harnesses.toml) for exact versions and credential names. You can check a CLI installation with `./bench install-check --harness droid`.
@@ -105,7 +174,7 @@ make test
 ./bench doctor
 ```
 
-The reference solutions should score 9/9 and the idle agent 0/9. These checks use no model key. Trials run sequentially and share a Docker base image. The project’s storage guard stops campaigns at 18 GB in the project folder. Docker layers and Ollama weights live in their own stores.
+The reference solutions should score 21/21 and the idle agent 0/21. These checks use no model key. Trials run sequentially and share a Docker base image. The project’s storage guard stops campaigns at 18 GB in the project folder. Docker layers and Ollama weights live in their own stores.
 
 </details>
 

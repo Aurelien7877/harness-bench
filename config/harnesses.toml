@@ -2,7 +2,7 @@
 # Model strings are explicit per campaign; no model is selected silently.
 [pi]
 agent = "pi"
-version = "1.0.4"
+version = "1.5.2"
 credential_env = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "DEEPSEEK_API_KEY", "OPENROUTER_API_KEY"]
 status = "upstream Harbor adapter"
 
@@ -20,7 +20,7 @@ status = "upstream Harbor adapter"
 
 [opencode]
 agent = "opencode"
-version = "1.19.5"
+version = "1.19.6"
 credential_env = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "DEEPSEEK_API_KEY", "OPENROUTER_API_KEY"]
 status = "upstream Harbor adapter; npm stable v1, not the separately documented v2"
 
@@ -32,7 +32,7 @@ status = "local thin adapter; paid execution not yet tested"
 
 [droid]
 import_path = "adapters.command:Droid"
-version = "1.6.0"
+version = "1.14.0"
 credential_env = ["FACTORY_API_KEY"]
 status = "local thin adapter; paid execution not yet tested"
 

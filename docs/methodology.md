@@ -9,7 +9,7 @@ and small. Keep the generated programs and read the failures alongside the score
 1. Start with two harnesses and one local model that supports tools. Keep the
    model digest, machine, context request, output limit and timeout the same.
 2. Choose `quick` for six tasks across startup, coding, data science, research
-   and general work. Use `full` for all nine tasks and context retrieval.
+   and general work. Use `math` for a quick check of whether a harness gets the model to run code; use `full` for all twenty-one tasks.
 3. Use one attempt to check compatibility. Repeat promising comparisons later.
    Repeated attempts on the same task add less evidence than new tasks.
 4. Review failure types and outputs before changing the model or limits. Change

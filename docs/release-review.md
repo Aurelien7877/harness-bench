@@ -5,7 +5,7 @@ container, paid inference or benchmark campaign was run for the review.
 
 ## Evaluation checks
 
-- Nine tasks across six categories, with clear deliverables and pass rules.
+- Twenty-one tasks across seven categories, with clear deliverables and pass rules.
 - Four script tasks check a saved answer, a public rerun and two held-out inputs.
 - Regression checks reject sample-only code, changed saved answers, malformed
   numbers, booleans used as numbers and missing or extra fields.
