@@ -13,12 +13,13 @@ class CommandAgent(BaseAgent):
     package = ""
     binary = ""
 
-    def __init__(self, *args, version, local_model=None, local_context=32768, local_output=8192, local_port=11434, profile=None, **kwargs):
+    def __init__(self, *args, version, local_model=None, local_context=32768, local_output=8192, local_port=11434, profile=None, check_retries=0, **kwargs):
         super().__init__(*args, **kwargs)
         self.local_model = local_model
         self.local_context = local_context
         self.local_output = local_output
         self.local_port = local_port
+        self.check_retries = check_retries  # re-run the agent when its output files are missing or invalid
         self.profile = profile  # optional tuned guidance, uploaded as AGENTS.md
         self.pin = version
         self.detected_version = None
@@ -37,7 +38,10 @@ class CommandAgent(BaseAgent):
 
     async def setup(self, environment):
         spec = shlex.quote(f"{self.package}@{self.pin}")
-        await self.checked(environment, f"npm install -g {spec}", timeout_sec=300)
+        # The shared image already has the pinned CLI (scripts/image.py); install only when it does not.
+        present = await environment.exec(command=f"npm ls -g --depth=0 | grep -qF {spec}", timeout_sec=30)
+        if present.return_code != 0:
+            await self.checked(environment, f"npm install -g {spec}", timeout_sec=300)
         result = await self.checked(environment, f"{self.binary} --version", timeout_sec=30)
         self.detected_version = (result.stdout or "").strip()
         self.logs_dir.mkdir(parents=True, exist_ok=True)
@@ -60,12 +64,24 @@ class CommandAgent(BaseAgent):
         await environment.upload_file(source_path=prompt, target_path="/tmp/bench-prompt.txt")
         command = shlex.join(self.argv())
         result = None
-        context.metadata = {"usage_status": "unknown", "adapter": type(self).__name__}
+        context.metadata = {"usage_status": "unknown", "adapter": type(self).__name__, "check_retries_used": 0}
+        redirect = ">"
         try:
-            result = await environment.exec(
-                command=f"cd /workspace && {command} < /tmp/bench-prompt.txt > /logs/agent/native.jsonl 2> /logs/agent/native.stderr",
-                env=self._extra_env,
-            )
+            for attempt in range(self.check_retries + 1):
+                result = await environment.exec(
+                    command=f"cd /workspace && {command} < /tmp/bench-prompt.txt {redirect} /logs/agent/native.jsonl 2> /logs/agent/native.stderr",
+                    env=self._extra_env,
+                )
+                if attempt == self.check_retries:
+                    break
+                problems = await self.output_problems(environment)
+                if not problems:
+                    break
+                context.metadata["check_retries_used"] = attempt + 1
+                retry = self.logs_dir / "prompt-retry.txt"
+                retry.write_text(f"{instruction}\n\nA check of your work found: {problems}. Fix this, then finish.")
+                await environment.upload_file(source_path=retry, target_path="/tmp/bench-prompt.txt")
+                redirect = ">>"
         finally:
             # Retain available counters if the model run is cancelled or fails.
             try:
@@ -80,6 +96,29 @@ class CommandAgent(BaseAgent):
                 context.metadata['usage_collection_error'] = type(error).__name__
         if result.return_code != 0:
             raise RuntimeError(f"{self.name()} exited {result.return_code}; see native.stderr")
+
+    async def output_problems(self, environment):
+        result = await environment.exec(command=f"python3 -c {shlex.quote(OUTPUT_CHECK)} /workspace /tmp/bench-prompt.txt", timeout_sec=30)
+        return (result.stdout or "").strip()
+
+
+# Runs inside the task container. Prints what is wrong with the files the task asks for; prints nothing when fine.
+OUTPUT_CHECK = r"""
+import json, os, sys
+workspace, prompt = sys.argv[1:3]
+text = open(prompt).read()
+errors = []
+if "answer.json" in text:
+    try:
+        json.load(open(os.path.join(workspace, "answer.json")))
+    except FileNotFoundError:
+        errors.append("answer.json does not exist")
+    except ValueError as error:
+        errors.append("answer.json is not valid JSON (%s)" % error)
+if "analyze.py" in text and not os.path.exists(os.path.join(workspace, "analyze.py")):
+    errors.append("analyze.py does not exist")
+print("; ".join(errors))
+"""
 
 
 def parse_usage(text, kind):

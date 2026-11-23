@@ -107,7 +107,7 @@ def test_notebook_updates_stale_dependencies_before_docker_setup(tmp_path, monke
     monkeypatch.setattr(urllib.request,'urlopen',lambda *a,**k:io.BytesIO(b'{"models":[{"name":"fixture"}]}'))
     exec(compile(preparation,'notebook preparation','exec'),
          dict(run_new_campaign=True,bench=SimpleNamespace(runtime_versions=versions),
-              root=tmp_path,model='fixture',sys=sys))
+              root=tmp_path,model='fixture',provider=None,sys=sys))
     assert len(checks)==2
     assert calls[0][-2:]==['-r',str(tmp_path/'requirements.lock')]
     assert calls[1]==['docker','info']
@@ -126,3 +126,46 @@ def test_notebook_can_prepare_a_venv_without_pip_or_uv(monkeypatch):
     exec(compile(preparation,'notebook preparation','exec'),dict(run_new_campaign=False,sys=sys))
     assert commands[0]==[sys.executable,'-m','ensurepip','--upgrade']
     assert commands[1]==[sys.executable,'-m','pip','install','matplotlib>=3.9,<4']
+
+
+def test_cloud_campaign_runs_trials_in_parallel_without_a_local_digest(tmp_path, monkeypatch):
+    source = bench.ROOT
+    shutil.copytree(source/'config',tmp_path/'config')
+    shutil.copy(source/'requirements.lock',tmp_path/'requirements.lock')
+    shutil.copytree(source/'tasks/startup',tmp_path/'tasks/startup')
+    monkeypatch.setattr(bench,'ROOT',tmp_path)
+    assert bench.is_cloud('glm-5.2:cloud') and not bench.is_cloud('lfm3:1.7b')
+    plan = bench.build_plan('demo',['pi'],{'pi':'glm-5.2:cloud'},local=True)
+    plan['cells'] = [dict(plan['cells'][0],attempt=i) for i in range(4)]
+    plan['runs'] = 4
+    monkeypatch.setattr(bench.subprocess,'run',lambda *a,**kw: SimpleNamespace(returncode=0,stdout='x'))
+    monkeypatch.setattr(bench.subprocess,'Popen',lambda *a,**kw: SimpleNamespace(returncode=0,poll=lambda:0))
+    import urllib.request
+    asked = []
+    monkeypatch.setattr(urllib.request,'urlopen',lambda request,**kw: asked.append(getattr(request,'full_url',request)) or io.BytesIO(b'{}'))
+    assert bench.execute(plan) == 0
+    campaign = next((tmp_path/'runs/campaigns').iterdir())
+    manifest = json.loads((campaign/'manifest.json').read_text())
+    assert (manifest['concurrency'], manifest['model_source'], manifest['ollama_digest']) == (3, 'cloud', None)
+    assert sum(url.endswith('/api/chat') for url in asked) == 1  # one sign-in check, no local weights lookup
+    ports = {json.loads(p.read_text())['agents'][0]['kwargs']['local_port'] for p in campaign.glob('*.json') if p.name != 'manifest.json'}
+    assert ports <= {11436, 11437, 11438}
+
+
+def test_preinstalled_agent_skips_the_download_when_the_image_has_it():
+    import asyncio
+    from adapters.preinstalled import Preinstalled
+    class Base:
+        installed = False
+        async def install(self, environment):
+            self.installed = True
+    class Agent(Preinstalled, Base):
+        package_to_check = 'tool'
+        _version = '1.0'
+    class Environment:
+        def __init__(self, code): self.code = code
+        async def exec(self, **kwargs): return SimpleNamespace(return_code=self.code)
+    present, absent = Agent(), Agent()
+    asyncio.run(present.install(Environment(0)))
+    asyncio.run(absent.install(Environment(1)))
+    assert (present.installed, absent.installed) == (False, True)

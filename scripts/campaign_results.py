@@ -154,8 +154,18 @@ def summarize(rows):
     return records
 
 
+def sign_test(wins, losses):
+    """Two-sided exact sign test on discordant pairs; None when there are none."""
+    from math import comb
+    n = wins + losses
+    if not n:
+        return None
+    tail = sum(comb(n,k) for k in range(min(wins,losses)+1)) / 2**n
+    return min(1.0, 2*tail)
+
+
 def paired_outcomes(rows):
-    """Descriptive pairs only: identical model, task and attempt; no p-values."""
+    """Pairs with identical model, task and attempt; p_value is an exploratory exact sign test."""
     configurations = _configurations(rows)
     records = []
     for left,right in combinations(configurations,2):
@@ -178,7 +188,7 @@ def paired_outcomes(rows):
         wins = sum(maps[0][key]=="passed" and maps[1][key]!="passed" for key in eligible)
         losses = sum(maps[1][key]=="passed" and maps[0][key]!="passed" for key in eligible)
         records.append(dict(left=left[0],right=right[0],model=left[1],matched=len(eligible),
-                            left_wins=wins,right_wins=losses,ties=len(eligible)-wins-losses,
+                            left_wins=wins,right_wins=losses,p_value=sign_test(wins,losses),ties=len(eligible)-wins-losses,
                             unmatched=len(maps[0])+len(maps[1])-2*len(eligible)))
     return records
 

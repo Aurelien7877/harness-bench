@@ -47,8 +47,10 @@ def test_grader_accepts_oracle_rejects_missing_and_wrong(name, tmp_path):
         answer[next(iter(answer))] = 'deliberately wrong'
         (tmp_path/'answer.json').write_text(json.dumps(answer))
     else:
-        text = (tmp_path/'candidate.py').read_text()
-        (tmp_path/'candidate.py').write_text(text + '\n' + "def " + {'humaneval-0':'has_close_elements','humaneval-12':'longest','humaneval-53':'add'}[name] + "(*args, **kwargs): raise RuntimeError('bad')\n")
+        broken = {'humaneval-0':'has_close_elements','humaneval-12':'longest','humaneval-53':'add'}.get(name)
+        for source in tmp_path.glob('*.py') if not broken else [tmp_path/'candidate.py']:
+            if not source.name.startswith(('test_', 'check_')):
+                source.write_text(source.read_text() + '\n' + (f"def {broken}(*args, **kwargs): " if broken else '') + "raise RuntimeError('bad')\n")
     assert subprocess.run(check, cwd=tmp_path, env=env, capture_output=True, timeout=10).returncode != 0
 
 
@@ -164,7 +166,7 @@ def test_notebook_returns_partial_campaign_after_failure(tmp_path, monkeypatch, 
         def update(self, count):
             self.count += count
 
-    def fail(plan, progress, settings_override, resume=None):
+    def fail(plan, progress, settings_override, resume=None, concurrency=None, provider=None):
         assert settings_override["timeout_sec"] == 300
         progress("campaign", {"path":tmp_path, "total":plan["runs"]})
         raise failure

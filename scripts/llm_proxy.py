@@ -39,9 +39,12 @@ def parse_call(body, stream):
 class Proxy:
     """Start with Proxy(port).start(); call .log_to(path) before each trial."""
 
-    def __init__(self, port, upstream=('127.0.0.1', 11434), host='127.0.0.1'):
+    def __init__(self, port, upstream=('127.0.0.1', 11434), host='127.0.0.1', retries=0, remote=None):
+        """remote = dict(host, key, path_from, path_to, min_interval): an HTTPS provider reached with the key kept here."""
         self.lock = threading.Lock()
         self.path = None
+        self.next_start = 0.0
+        remote = remote or {}
         proxy = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -72,20 +75,55 @@ class Proxy:
                 try:
                     body = json.loads(payload) if payload else {}
                     stream = bool(body.get('stream'))
+                    changed = False
+                    for field in remote.get('drop_fields', ()):
+                        # OpenAI-only options (for example `store`) that a stricter provider rejects with HTTP 400.
+                        changed |= body.pop(field, None) is not None
                     if stream and 'chat/completions' in self.path and 'stream_options' not in body:
-                        # Standard OpenAI option: Ollama then reports token usage in the last chunk.
+                        # Standard OpenAI option: the server then reports token usage in the last chunk.
                         body['stream_options'] = {'include_usage': True}
+                        changed = True
+                    if changed:
                         payload = json.dumps(body).encode()
                         del self.headers['Content-Length']
                         self.headers['Content-Length'] = str(len(payload))
                 except (ValueError, AttributeError):
                     pass
-                upstream_conn = http.client.HTTPConnection(*upstream, timeout=3600)
-                headers = {k: v for k, v in self.headers.items() if k.lower() not in ('host', 'connection')}
-                status, first, captured = 502, None, bytearray()
+                skipped = ('host', 'connection') + (('authorization', 'accept-encoding') if remote else ())
+                headers = {k: v for k, v in self.headers.items() if k.lower() not in skipped}
+                request_path = self.path
+                if remote:
+                    # The harness holds a dummy key; the real one is added here and never reaches a container.
+                    headers['Authorization'] = 'Bearer ' + remote['key']
+                    headers['Accept-Encoding'] = 'identity'
+                    if request_path.startswith(remote['path_from']):
+                        request_path = remote['path_to'] + request_path[len(remote['path_from']):]
+                busy = (429, 500, 502, 503, 504) if remote else (429, 502, 503)
+                status, first, captured, tries, upstream_conn, busy_notes = 502, None, bytearray(), 0, None, []
                 try:
-                    upstream_conn.request(self.command, self.path, payload, headers)
-                    response = upstream_conn.getresponse()
+                    while True:
+                        proxy.wait_turn(remote.get('min_interval', 0))
+                        upstream_conn = (http.client.HTTPSConnection(remote['host'], timeout=600) if remote
+                                         else http.client.HTTPConnection(*upstream, timeout=3600))
+                        try:
+                            upstream_conn.request(self.command, request_path, payload, headers)
+                            response = upstream_conn.getresponse()
+                        except (OSError, http.client.HTTPException):
+                            upstream_conn.close()
+                            if not remote or tries >= retries:
+                                raise
+                            tries += 1
+                            time.sleep(min(30, 2 ** tries))
+                            continue
+                        if response.status in busy and tries < retries:
+                            # A busy service answers before any byte of the model reply: wait and ask again.
+                            wait = response.getheader('Retry-After')
+                            busy_notes.append(f'{response.status}: ' + response.read()[:240].decode(errors='replace'))
+                            upstream_conn.close()
+                            tries += 1
+                            time.sleep(min(60, float(wait)) if wait and wait.replace('.', '', 1).isdigit() else min(30, 2 ** tries))
+                            continue
+                        break
                     status = response.status
                     self.send_response(status)
                     for key, value in response.getheaders():
@@ -110,11 +148,13 @@ class Proxy:
                         except OSError:
                             pass
                 finally:
-                    upstream_conn.close()
-                    if self.path.endswith('/chat/completions') or self.path.endswith('/completions'):
+                    if upstream_conn:
+                        upstream_conn.close()
+                    if self.path.endswith('/completions'):
                         usage, tools = parse_call(bytes(captured), stream)
                         proxy.record({'start': started, 'first_byte': first, 'end': time.time(),
-                                      'status': status, 'stream': stream, 'tool_calls': tools,
+                                      'status': status, 'stream': stream, 'retries': tries, 'busy': busy_notes[-2:],
+                                      'error': bytes(captured[:300]).decode(errors='replace') if status != 200 else None, 'tool_calls': tools,
                                       'input_tokens': (usage or {}).get('prompt_tokens'),
                                       'output_tokens': (usage or {}).get('completion_tokens')})
 
@@ -126,6 +166,16 @@ class Proxy:
 
         self.server = Server((host, port), Handler)
         self.server.daemon_threads = True
+
+    def wait_turn(self, interval):
+        """Space request starts by `interval` seconds to stay under a requests-per-minute limit."""
+        if not interval:
+            return
+        with self.lock:
+            now = time.time()
+            start = max(now, self.next_start)
+            self.next_start = start + interval
+        time.sleep(max(0, start - now))
 
     def log_to(self, path):
         with self.lock:

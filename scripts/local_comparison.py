@@ -10,13 +10,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def comparison_command(model, harnesses, suite, attempts):
+def comparison_command(model, harnesses, suite, attempts, concurrency=None, provider=None):
     if not model.strip() or attempts < 1:
         raise ValueError("Choose a model tag and at least one attempt.")
     command = [str(ROOT / "bench"), "local", "--model", model,
                "--suite", suite, "--attempts", str(attempts)]
     for harness in harnesses:
         command.extend(["--harness", harness])
+    if concurrency:
+        command.extend(["--concurrency", str(concurrency)])
+    if provider:
+        command.extend(["--provider", provider])
     return command
 
 
@@ -34,7 +38,7 @@ def read_results(campaign):
 
 
 
-def run_comparison(model, harnesses, suite="demo", attempts=1, *, timeout_sec=600, context_window=32768, max_output_tokens=8192, resume=None):
+def run_comparison(model, harnesses, suite="demo", attempts=1, *, timeout_sec=600, context_window=32768, max_output_tokens=8192, resume=None, concurrency=None, provider=None):
     """Run (or resume) a local campaign in the notebook kernel with a tqdm bar.
 
     The bar counts finished trials, shows elapsed time and an ETA, and keeps a
@@ -53,6 +57,7 @@ def run_comparison(model, harnesses, suite="demo", attempts=1, *, timeout_sec=60
     )
     campaign = None
     tally = Counter()
+    running = {}  # job -> label, several at once when concurrency > 1
     from scripts.campaign_results import classify
     with tqdm(total=plan["runs"] if plan else None, desc="Harness comparison", unit="trial",
               bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} trials [{elapsed}<{remaining}] {postfix}") as bar:
@@ -67,20 +72,23 @@ def run_comparison(model, harnesses, suite="demo", attempts=1, *, timeout_sec=60
                 bar.total = data["total"]
                 getattr(bar, "refresh", lambda: None)()
             elif event == "trial_start":
-                summary(now=f"{data['harness']} / {data['task']}", state="running")
+                running[data["job"]] = f"{data['harness']} / {data['task']}"
+                summary(now=" | ".join(running.values()), state="running")
             elif event == "heartbeat":
                 idle = data["idle_seconds"]
-                summary(now=f"{data['harness']} / {data['task']}",
+                running[data["job"]] = f"{data['harness']} / {data['task']}"
+                summary(now=" | ".join(running.values()),
                         last_event=data["last_event"] or "awaiting events",
                         idle="unknown" if idle is None else f"{idle:.0f}s")
             elif event == "trial_end":
+                running.pop(data["job"], None)
                 outcome = classify(data["result"], started=True) if data["result"] else "skipped"
                 tally[outcome] += 1
                 summary(last=f"{data['harness']} / {data['task']} -> {outcome}")
                 bar.update(1)
 
         try:
-            bench.execute(plan, progress=progress, resume=resume, settings_override=None if resume else {
+            bench.execute(plan, progress=progress, resume=resume, concurrency=concurrency, provider=provider, settings_override=None if resume else {
                 'timeout_sec':timeout_sec, 'context_window':context_window,
                 'max_output_tokens':max_output_tokens,
             })
@@ -99,9 +107,11 @@ def run_comparison(model, harnesses, suite="demo", attempts=1, *, timeout_sec=60
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", default="lfm3:1.7b")
-    parser.add_argument("--harness", action="append", choices=["pi", "opencode", "droid", "droid-tuned", "dsh"])
-    parser.add_argument("--suite", choices=["demo", "smoke", "quick", "math", "full", "tune-dev", "tune-test", "tune"], default="demo")
+    parser.add_argument("--harness", action="append", choices=["pi", "opencode", "droid", "droid-tuned", "dsh", "bare"])
+    parser.add_argument("--suite", choices=["demo", "smoke", "quick", "math", "value", "full", "tune-dev", "tune-test", "tune"], default="demo")
     parser.add_argument("--attempts", type=int, default=1)
+    parser.add_argument("--concurrency", type=int, help="Trials at once (default 1 locally, 3 for Ollama cloud models)")
+    parser.add_argument("--provider", help="API provider from config/bench.toml, for example gemini")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--run", action="store_true", help="Start the comparison in this terminal")
     mode.add_argument("--results", type=Path, metavar="CAMPAIGN", help="Read an existing campaign folder")
@@ -110,7 +120,7 @@ def main():
         print(json.dumps(read_results(args.results), indent=2))
         return
     command = comparison_command(args.model, args.harness or ["pi", "opencode"],
-                                 args.suite, args.attempts)
+                                 args.suite, args.attempts, args.concurrency, args.provider)
     if args.run:
         os.execv(command[0], command)
     print(shlex.join(command))

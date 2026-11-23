@@ -6,6 +6,8 @@ stop_folder_gb = 18.0
 timeout_sec = 600
 # Local logging proxy between trial containers and Ollama (calls, latency, tokens).
 llm_proxy_port = 11436
+# Trials run at once: 1 for a local model (one GPU), 3 for Ollama cloud models (the plan's concurrent-request limit).
+cloud_concurrency = 3
 context_window = 32768
 max_output_tokens = 8192
 attempts = 1
@@ -16,7 +18,20 @@ demo = ["startup", "humaneval-53"]
 smoke = ["startup", "humaneval-53", "context-needle"]
 quick = ["startup", "humaneval-53", "ds-aggregation", "research-source", "general-expenses", "context-needle", "math-bignum", "math-count"]
 math = ["math-word", "math-bignum", "math-count"]
+value = ["math-word", "math-bignum", "math-count", "code-fix-stats", "code-run-seeds", "code-roman"]
 tune-dev = ["ds-aggregation", "research-source", "general-reconciliation"]
 tune-test = ["ds-retrieval", "research-evidence", "context-contact"]
 tune = ["ds-aggregation", "research-source", "general-reconciliation", "ds-retrieval", "research-evidence", "context-contact"]
 full = ["startup", "startup-wordcount", "startup-greeting", "humaneval-0", "humaneval-12", "humaneval-53", "ds-aggregation", "ds-retrieval", "ds-leakage", "research-evidence", "research-latest", "research-source", "general-reconciliation", "general-expenses", "general-contacts", "context-revisions", "context-needle", "context-contact", "math-word", "math-bignum", "math-count"]
+
+# API providers reachable with `--provider NAME`. The key is read from the environment or .env and stays on this
+# machine: the measuring proxy adds it, so containers only ever hold a dummy value.
+[providers.gemini]
+host = "generativelanguage.googleapis.com"
+path_from = "/v1"
+path_to = "/v1beta/openai"
+key_env = "GEMINI_API_KEY"
+concurrency = 2
+min_interval = 2.0   # seconds between request starts per worker's share; keeps a free tier under about 30 requests a minute
+drop_fields = ["store"]   # OpenAI-only request fields Gemini rejects with HTTP 400
+retries = 6          # waits for 429/5xx before any reply byte, honoring Retry-After

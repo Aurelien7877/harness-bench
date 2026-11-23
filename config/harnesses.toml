@@ -42,10 +42,17 @@ import_path = "adapters.command:Droid"
 version = "1.14.0"
 profile = "profiles/droid.md"
 credential_env = ["FACTORY_API_KEY"]
-status = "droid plus a tuned AGENTS.md profile (see profiles/droid.sim.json)"
+status = "droid plus a tuned AGENTS.md profile and an output check that re-runs the agent (see profiles/droid.sim.json)"
+options = { check_retries = 2 }
 
 [dsh]
 import_path = "adapters.command:DSH"
 version = "0.2.2-rc.1"
 credential_env = ["DEEPSEEK_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"]
 status = "local thin adapter; paid execution not yet tested"
+
+[bare]
+import_path = "adapters.bare:Bare"
+version = "1"
+credential_env = []
+status = "no harness: one model call without tools; the reply is saved as the file the task names (local models only)"

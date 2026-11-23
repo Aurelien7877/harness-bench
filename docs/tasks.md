@@ -1,6 +1,6 @@
 # What the tasks measure
 
-The pack contains twenty-one small tasks across seven categories, three per category. The second and third task of each category except data science are deliberately easy, so a small local model can show a success. It is a screening tool for choosing a harness on your own machine. It does not estimate a model's general intelligence or reproduce an official leaderboard.
+The pack contains twenty-four small tasks. The `full` suite uses twenty-one of them, three per category across seven categories; the `value` suite adds three coding tasks that need running code. The second and third task of each category except data science are deliberately easy, so a small local model can show a success. It is a screening tool for choosing a harness on your own machine. It does not estimate a model's general intelligence or reproduce an official leaderboard.
 
 | Task | Category | Required work | How it is graded |
 |---|---|---|---|
@@ -19,6 +19,9 @@ The pack contains twenty-one small tasks across seven categories, three per cate
 | `math-word` | Math | Two-step shopping word problem (change and item count). | Exact numbers. |
 | `math-bignum` | Math | Compute a 5-digit product, a modular power and the 70th Fibonacci number exactly. | Exact integers. Hard to do by head, trivial with code. |
 | `math-count` | Math | Count integers by digit sum and divisibility, count primes below 100000 and find the largest twin prime below it. | Exact integers; requires running code. |
+| `code-fix-stats` | Python coding | Fix three bugs in a small module until the visible test passes (chunks, median, percentage rounding). | Held-out cases for each function, plus the visible test. |
+| `code-run-seeds` | Python coding | Run a deterministic simulation for three seeds and report its printed counts. | Exact counts; the answer cannot be guessed, it has to be computed. |
+| `code-roman` | Python coding | Write `to_roman` and `from_roman` for 1 to 3999 and make a visible round-trip check print OK. | Known values, reverse values, full round trip and distinct outputs. |
 | `ds-aggregation` | Data science | Deduplicate a CSV before filtering, preserve signed refunds and zeros, aggregate decimal amounts. | Saved public answer, public rerun and two held-out inputs. Checks include duplicate invalid first rows, new regions, decimals and zero totals. |
 | `ds-retrieval` | Data science | Calculate mean recall@3 and MRR@3, then choose a retriever. | Saved public answer, public rerun and two held-out inputs. Checks include first relevant rank, top-three cutoff, no hits, short/empty rankings and ties. |
 | `ds-leakage` | Data science | Audit a supplied experiment for future-information leakage and an invalid split. | Exact structured answer with separate checks for leakage columns, split, preprocessing and the accuracy claim. No training. |

@@ -9,13 +9,13 @@ and small. Keep the generated programs and read the failures alongside the score
 1. Start with two harnesses and one local model that supports tools. Keep the
    model digest, machine, context request, output limit and timeout the same.
 2. Choose `quick` for six tasks across startup, coding, data science, research
-   and general work. Use `math` for a quick check of whether a harness gets the model to run code; use `full` for all twenty-one tasks.
+   and general work. Use `math` for a quick check of whether a harness gets the model to run code; use `value` to compare harnesses with the model alone; use `full` for all twenty-one tasks.
 3. Use one attempt to check compatibility. Repeat promising comparisons later.
    Repeated attempts on the same task add less evidence than new tasks.
 4. Review failure types and outputs before changing the model or limits. Change
    one factor at a time and keep campaigns separate.
 
-Trials run one at a time. Their order is seeded and shuffled; startup always
+Trials of a local model run one at a time; Ollama cloud models run up to three at once, each with its own measuring proxy. Their order is seeded and shuffled; startup always
 runs first. This reduces predictable ordering but does not remove cache,
 thermal or warmup effects. Agent time excludes CLI installation and grading;
 it is not total elapsed campaign time. A timeout is an observed limit, not
@@ -66,3 +66,7 @@ configuration snapshots, key Python library versions and the Ollama digest. Tria
 mid-campaign. Old campaigns retain their original grading. Do not pool results
 across task revisions or assume that a newer grader retroactively applies to
 saved outputs. Keep private runs and generated files out of commits.
+
+## No-harness baseline
+
+`bare` (local models only) is the model without a harness: one chat call, no tools, no retry. Its prompt holds the instruction and the text files already in the workspace, and the first code block of its reply is saved as the file the task names. Comparing a harness with `bare` on the same tasks and attempts shows what the harness adds, as opposed to what it changes relative to another harness. The `value` suite pairs tasks that need running code with tasks that do not, so the baseline is expected to match on the second kind.

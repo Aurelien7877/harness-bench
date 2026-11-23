@@ -14,14 +14,14 @@ def write(path, text):
     path.write_text(text)
 
 
-def task(name, category, instruction, files, solution, check, provenance):
+def task(name, category, instruction, files, solution, check, provenance, difficulty="easy"):
     target = TASKS / name
     write(target / "instruction.md", instruction + "\nWork in /workspace. Do not install packages or use the network.\n")
     write(target / "task.toml", f'''schema_version = "1.4"
 [metadata]
 category = "{category}"
 author_name = "Personal harness benchmark"
-difficulty = "easy"
+difficulty = "{difficulty}"
 source = "{provenance}"
 [agent]
 timeout_sec = 600
@@ -269,6 +269,11 @@ Path(sys.argv[2]).write_text(json.dumps({'balances':balances,'unapplied_credit':
     json_task("math-word", "math", "Maya has 50 EUR. She buys 4 notebooks at 3.50 EUR each and 6 pens at 0.75 EUR each. Return change_eur (money left, a number) and items (how many things she bought, an integer).", {"problem.txt": "Maya has 50 EUR. She buys 4 notebooks at 3.50 EUR each and 6 pens at 0.75 EUR each.\n"}, {"change_eur": 50 - 4*3.5 - 6*0.75, "items": 10})
     json_task("math-bignum", "math", "Compute exactly: product = 48271 * 69313; power_mod = the remainder of 3 to the power 2026 divided by 1000007; fibonacci_70 = the 70th Fibonacci number with fib(1)=1 and fib(2)=1. Return them as integers. Use the shell or Python to compute; do not estimate.", {"README.txt": "Exact integer arithmetic. Python 3 is installed.\n"}, {"product": 48271 * 69313, "power_mod": pow(3, 2026, 1000007), "fibonacci_70": fib70})
     json_task("math-count", "math", "Using code, count: digit_sum_20 = the integers n with 1 <= n <= 300000 whose decimal digits sum to 20 and that are divisible by 7; primes_below_100000 = the number of primes below 100000; twin_prime_below_100000 = the largest p below 100000 such that p and p+2 are both prime. Return integers. Use the shell or Python; do not estimate.", {"README.txt": "Counting with code. Python 3 is installed.\n"}, {"digit_sum_20": digit_count, "primes_below_100000": len(primes), "twin_prime_below_100000": twin})
+    # Coding tier: the model has to run code (tests, a simulation) to get the answer right.
+    for folder in sorted((ROOT / "scripts/templates/code").iterdir()):
+        files = {p.name: p.read_text() for p in (folder / "inputs").iterdir() if p.is_file()}
+        task(folder.name, "coding", (folder / "instruction.md").read_text().rstrip("\n"), files,
+             (folder / "solve.py").read_text(), (folder / "check.py").read_text(), "written for this benchmark", "medium")
     print(f"Prepared {len(list(TASKS.iterdir()))} Harbor tasks")
 
 

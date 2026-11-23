@@ -9,16 +9,21 @@ import os
 import random
 import shutil
 import signal
+import queue
 import subprocess
 import sys
+import threading
 import time
 import tomllib
+import urllib.error
 import urllib.request
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
 from scripts.campaign_results import classify, summarize
+from scripts.image import build_base_image as _build_base_image
 from scripts.llm_proxy import Proxy, summarize_calls
 
 ROOT = Path(__file__).resolve().parent
@@ -143,8 +148,8 @@ def build_plan(suite, harnesses, models, attempts=1, *, local=False):
     random.Random(settings['seed']).shuffle(cells)
     cells.sort(key=lambda cell: not cell['task'].startswith('startup'))
     paid = sum(c['harness'] not in ('oracle', 'nop') for c in cells)
-    if local and any(h not in ('pi', 'opencode', 'droid', 'dsh', 'droid-tuned') for h in harnesses):
-        raise ValueError('Local inference supports pi, opencode, droid, droid-tuned and dsh')
+    if local and any(h not in ('pi', 'opencode', 'droid', 'dsh', 'droid-tuned', 'bare') for h in harnesses):
+        raise ValueError('Local inference supports pi, opencode, droid, droid-tuned, dsh and bare')
     if local and any(not c['model'] for c in cells):
         raise ValueError('Local inference requires an explicit model for every harness')
     if local and len({c['model'] for c in cells}) != 1:
@@ -156,7 +161,7 @@ def build_plan(suite, harnesses, models, attempts=1, *, local=False):
             'campaign_limit_eur': settings['budget_eur'], 'budget_kind': 'planning reserve; provider hard cap required', 'cells': cells}
 
 
-def job_config(cell, name, install_only=False, snapshot=None, *, local=False):
+def job_config(cell, name, install_only=False, snapshot=None, *, local=False, port=None):
     settings, registry = snapshot or read_config()
     h = cell['harness']
     if h in ('oracle', 'nop'):
@@ -164,8 +169,9 @@ def job_config(cell, name, install_only=False, snapshot=None, *, local=False):
     else:
         entry = registry[h]
         profile = entry.get('profile')
+        options = entry.get('options', {})
         h = entry.get('base', h)  # a tuned variant behaves like its base harness
-        agent = {'model_name': cell['model'], 'kwargs': {'version': entry['version']},
+        agent = {'model_name': cell['model'], 'kwargs': {'version': entry['version'], **options},
                  'override_timeout_sec': settings['timeout_sec'],
                  'env': {k: '${' + k + '}' for k in entry['credential_env'] if os.environ.get(k)}}
         agent.update({'import_path': entry['import_path']} if 'import_path' in entry else {'name': entry['agent']})
@@ -178,9 +184,12 @@ def job_config(cell, name, install_only=False, snapshot=None, *, local=False):
     if local:
         context = settings.get('context_window',32768)
         output = settings.get('max_output_tokens',8192)
-        port = settings.get('llm_proxy_port',11434)
+        port = port or settings.get('llm_proxy_port',11434)
         agent['env'] = {'BENCH_LOCAL_KEY': 'ollama'}
-        if h in ('droid', 'dsh'):
+        if h == 'bare':
+            agent.update(model_name=cell['model'], skip_model_parsing=True)
+            agent['kwargs'].update(local_model=cell['model'], local_output=output, local_port=port)
+        elif h in ('droid', 'dsh'):
             agent['skip_model_parsing'] = True
             agent['kwargs'].update(local_model=cell['model'], local_context=context, local_output=output, local_port=port)
             if profile:
@@ -205,6 +214,8 @@ def job_config(cell, name, install_only=False, snapshot=None, *, local=False):
             agent['import_path'] = 'adapters.local_pi:LocalPi'
             agent['kwargs'].update(local_context=context, local_output=output, local_port=port)
         if h == 'opencode':
+            agent.pop('name',None)
+            agent['import_path'] = 'adapters.local_opencode:LocalOpenCode'
             agent['kwargs']['opencode_config'] = {
                 'provider': {'bench-local': {'models': {cell['model']: {
                     'limit': {'context':context, 'output':output},
@@ -352,6 +363,71 @@ def report(campaign):
     return rows
 
 
+def is_cloud(tag):
+    """Ollama cloud models carry a `cloud` suffix and run through the signed-in local daemon."""
+    return bool(tag) and tag.endswith(('-cloud', ':cloud'))
+
+
+def cloud_check(tag):
+    """One-token request that proves sign-in, model name and quota before a campaign starts."""
+    request = urllib.request.Request('http://127.0.0.1:11434/api/chat', method='POST', data=json.dumps({
+        'model': tag, 'messages': [{'role': 'user', 'content': 'ok'}], 'stream': False,
+        'options': {'num_predict': 1}}).encode())
+    try:
+        urllib.request.urlopen(request, timeout=120).read()
+    except urllib.error.HTTPError as error:
+        raise ValueError(f'Ollama refused {tag} (HTTP {error.code}). Run `ollama signin`, check the model name '
+                         f'at https://ollama.com/search?c=cloud and your plan. {error.read()[:200].decode(errors="replace")}')
+    except OSError as error:
+        raise ValueError(f'Ollama is not reachable at 127.0.0.1:11434 ({error}). Start Ollama first.')
+
+
+def load_env_file(path=None):
+    """Read KEY=value lines from .env into this process only; Harbor and the containers never inherit them."""
+    try:
+        lines = (path or ROOT/'.env').read_text().splitlines()
+    except OSError:
+        return
+    for line in lines:
+        name, _, value = line.partition('=')
+        if name.strip() and not name.lstrip().startswith('#') and value:
+            os.environ.setdefault(name.strip(), value.strip().strip('"\''))
+
+
+def remote_provider(settings, name, workers=1):
+    """Connection settings for an API provider from config/bench.toml; the key comes from the environment."""
+    config = settings.get('providers', {}).get(name)
+    if not config:
+        raise ValueError(f'Unknown provider {name!r}; add [providers.{name}] to config/bench.toml.')
+    load_env_file()
+    key = os.environ.get(config['key_env'])
+    if not key:
+        raise ValueError(f'Set {config["key_env"]} in the environment or in .env (it is git-ignored).')
+    # Spacing is per proxy and each worker has its own, so scale it to keep the provider's total rate.
+    return dict(host=config['host'], key=key, path_from=config['path_from'], path_to=config['path_to'],
+                min_interval=config.get('min_interval', 0) * workers,
+                drop_fields=config.get('drop_fields', [])), config
+
+
+def provider_check(remote, tag):
+    """One-token request proving the key, the model name and the free quota before a campaign starts."""
+    request = urllib.request.Request(f'https://{remote["host"]}{remote["path_to"]}/chat/completions', method='POST',
+                                     headers={'Authorization': 'Bearer ' + remote['key'], 'Content-Type': 'application/json'},
+                                     data=json.dumps({'model': tag, 'messages': [{'role': 'user', 'content': 'ok'}], 'max_tokens': 5}).encode())
+    try:
+        urllib.request.urlopen(request, timeout=120).read()
+    except urllib.error.HTTPError as error:
+        detail = error.read()[:300].decode(errors='replace').replace(remote['key'], '***')
+        raise ValueError(f'{remote["host"]} refused {tag} (HTTP {error.code}): {detail}')
+    except OSError as error:
+        raise ValueError(f'Could not reach {remote["host"]}: {error}')
+
+
+def build_base_image(force=False):
+    """Shared task image with every pinned agent CLI preinstalled; rebuilt only when versions change."""
+    return _build_base_image(read_config()[1], force=force, env=runtime_env())
+
+
 def warm_up(tag):
     """Load the model once so the first trial does not pay the weight-loading time."""
     request = urllib.request.Request('http://127.0.0.1:11434/api/generate', method='POST',
@@ -363,13 +439,14 @@ def warm_up(tag):
         pass  # warm-up is an optimisation; the campaign itself will report real errors
 
 
-def execute(plan, provider_cap=None, install_only=False, progress=None, settings_override=None, resume=None):
+def execute(plan, provider_cap=None, install_only=False, progress=None, settings_override=None, resume=None, concurrency=None, provider=None):
     settings, registry = read_config()
     settings.update(settings_override or {})
     if resume:
         # Continue with the exact settings and harness versions the campaign started with.
         saved = json.loads((Path(resume)/'manifest.json').read_text())
         plan = saved
+        provider = saved.get('provider')
         settings, registry = saved['configuration_snapshot']['settings'], saved['configuration_snapshot']['harnesses']
     if settings['timeout_sec'] <= 0 or not 0 < settings['max_output_tokens'] < settings['context_window']:
         raise ValueError('Use a positive timeout and output tokens below the context window.')
@@ -388,13 +465,23 @@ def execute(plan, provider_cap=None, install_only=False, progress=None, settings
     initial_bytes = folder_bytes()
     if initial_bytes/1e9 >= settings['stop_folder_gb']:
         raise ValueError('Folder near storage limit; archive your runs before continuing')
-    if plan.get('local'):
+    cloud = bool(plan.get('local')) and is_cloud(plan['cells'][0]['model'])
+    remote_config = {}
+    if plan.get('local') and provider:
+        workers_hint = int(concurrency or plan.get('concurrency') or settings.get('providers', {}).get(provider, {}).get('concurrency', 1))
+        remote, remote_config = remote_provider(settings, provider, workers_hint)
+        provider_check(remote, plan['cells'][0]['model'])
+        plan['ollama_digest'], plan['ollama_runtime'] = None, {}
+    elif plan.get('local') and cloud:
+        cloud_check(plan['cells'][0]['model'])
+        plan['ollama_digest'], plan['ollama_runtime'] = None, {}
+    elif plan.get('local'):
         # /api/tags includes the digest of the locally installed weights.
         with urllib.request.urlopen('http://127.0.0.1:11434/api/tags', timeout=5) as response:
             installed = json.load(response)['models']
         tag = plan['cells'][0]['model']
         record = next((m for m in installed if m['name'] == tag), None)
-        if not record or not record.get('size') or record.get('remote_host') or 'cloud' in tag.lower():
+        if not record or not record.get('size') or record.get('remote_host'):
             raise ValueError(f'Pull a local Ollama model first: ollama pull {tag}')
         if resume and plan.get('ollama_digest') != record['digest']:
             raise ValueError('The installed model differs from the one this campaign started with; start a new campaign.')
@@ -407,6 +494,14 @@ def execute(plan, provider_cap=None, install_only=False, progress=None, settings
             except OSError:
                 plan['ollama_runtime'][endpoint] = None
         warm_up(tag)
+    if plan.get('local'):
+        build_base_image()
+    default = remote_config.get('concurrency') if provider else (settings.get('cloud_concurrency', 3) if cloud else 1)
+    workers = max(1, int(concurrency or plan.get('concurrency') or default or 1))
+    plan['concurrency'], plan['provider'] = workers, provider
+    plan['model_source'] = provider or ('cloud' if cloud else 'local')
+    if provider:
+        remote, remote_config = remote_provider(settings, provider, workers)
     if resume:
         campaign, manifest = Path(resume), plan
         manifest['state'] = 'running'
@@ -439,81 +534,99 @@ def execute(plan, provider_cap=None, install_only=False, progress=None, settings
         if progress:
             progress('campaign', {'path': campaign, 'total': len(manifest['cells'])})
     static_bytes = initial_bytes - folder_bytes(ROOT/'runs')
-    proxy = Proxy(settings['llm_proxy_port']).start() if plan.get('local') else None
-    try:
-        broken = Counter()
-        for cell in manifest['cells']:
-            for relative, digest in manifest['task_file_hashes'].items():
-                if hashlib.sha256((ROOT/relative).read_bytes()).hexdigest() != digest:
-                    raise RuntimeError('A task changed during the campaign; stopping to preserve comparability')
-            jobdir = ROOT/'runs/jobs'/cell['job']
-            if resume and cell.get('finished_at'):
-                previous = list(jobdir.glob('*/result.json'))
-                outcome = classify(read_json_object(previous[0]), started=True) if previous else None
-                if outcome in ('passed','incorrect','timeout'):
-                    if progress:
+    local = bool(plan.get('local'))
+    ports = [settings['llm_proxy_port'] + i for i in range(workers)]
+    # One proxy per worker keeps every model call attributed to its own trial. Cloud queues can reject, so retry there.
+    proxies = [Proxy(port, retries=remote_config.get('retries', 6) if provider else 3 if cloud else 0,
+                     remote=remote if provider else None).start() for port in ports] if local else []
+    slots = queue.Queue()
+    for i in range(workers):
+        slots.put(i)
+    lock = threading.RLock()  # guards the manifest, the report, the progress callback and the breaker
+    stop = threading.Event()
+    broken = Counter()
+
+    def run_cell(cell, slot):
+        for relative, digest in manifest['task_file_hashes'].items():
+            if hashlib.sha256((ROOT/relative).read_bytes()).hexdigest() != digest:
+                raise RuntimeError('A task changed during the campaign; stopping to preserve comparability')
+        jobdir = ROOT/'runs/jobs'/cell['job']
+        if resume and cell.get('finished_at'):
+            previous = list(jobdir.glob('*/result.json'))
+            outcome = classify(read_json_object(previous[0]), started=True) if previous else None
+            if outcome in ('passed','incorrect','timeout'):
+                if progress:
+                    with lock:
                         progress('trial_end', dict(cell, result=read_json_object(previous[0]), returncode=cell.get('returncode')))
-                    continue
-            if jobdir.exists():
-                # Keep the earlier attempt's files; the retry gets a clean job folder.
-                archive = ROOT/'runs/jobs/_retried'; archive.mkdir(exist_ok=True)
-                jobdir.rename(archive/(cell['job']+'-'+datetime.now(timezone.utc).strftime('%H%M%S')))
-            if plan.get('local') and broken[cell['harness']] >= 3:
+                return
+        if jobdir.exists():
+            # Keep the earlier attempt's files; the retry gets a clean job folder.
+            archive = ROOT/'runs/jobs/_retried'; archive.mkdir(exist_ok=True)
+            jobdir.rename(archive/(cell['job']+'-'+datetime.now(timezone.utc).strftime('%H%M%S')))
+        with lock:
+            skipped = local and broken[cell['harness']] >= 3
+            if skipped:
                 cell['skipped'] = 'three consecutive technical errors for this harness'
                 write_manifest(campaign, manifest)
                 if progress:
                     progress('trial_end', dict(cell, result={}, returncode=None))
-                continue
-            config = job_config(cell, cell['job'], install_only, snapshot=(settings, registry), local=plan.get('local', False))
-            path = campaign / (cell['job']+'.json')
-            path.write_text(json.dumps(config, indent=2))
+        if skipped:
+            return
+        config = job_config(cell, cell['job'], install_only, snapshot=(settings, registry), local=local, port=ports[slot])
+        path = campaign / (cell['job']+'.json')
+        path.write_text(json.dumps(config, indent=2))
+        with lock:
             cell['started_at'] = datetime.now(timezone.utc).isoformat()
-            if proxy:
-                proxy.log_to(campaign/(cell['job']+'.calls.jsonl'))
             write_manifest(campaign, manifest)
             if progress:
                 progress('trial_start', cell)
             else:
                 print(f'{cell["harness"]}: {cell["task"]}', flush=True)
-            with (campaign / (cell['job']+'.log')).open('w') as log:
-                credential_names = () if plan.get('local') or install_only else registry.get(cell['harness'],{}).get('credential_env',())
-                process = subprocess.Popen([*HARBOR_COMMAND,'run','-c',str(path)], env=runtime_env(credential_names), stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-                try:
-                    while process.poll() is None:
-                        if (static_bytes + folder_bytes(ROOT/'runs'))/1e9 >= settings['stop_folder_gb']:
-                            raise RuntimeError('Storage guard reached; stopping campaign')
-                        if progress:
-                            native = list((ROOT/'runs/jobs'/cell['job']).glob('*/agent/*.jsonl'))
-                            native += list((ROOT/'runs/jobs'/cell['job']).glob('*/agent/*.txt'))
-                            active = [p for p in native if p.stat().st_size]
-                            idle = min((time.time()-p.stat().st_mtime for p in active), default=None)
-                            event = None
-                            if active:
-                                last = max(active,key=lambda p:p.stat().st_mtime)
-                                with last.open('rb') as stream:
-                                    stream.seek(max(0,last.stat().st_size-4096))
-                                    for line in reversed(stream.read().decode(errors='replace').splitlines()):
-                                        try:
-                                            event = json.loads(line).get('type')
-                                            break
-                                        except (ValueError,AttributeError):
-                                            continue
+        if proxies:
+            proxies[slot].log_to(campaign/(cell['job']+'.calls.jsonl'))
+        with (campaign / (cell['job']+'.log')).open('w') as log:
+            credential_names = () if local or install_only else registry.get(cell['harness'],{}).get('credential_env',())
+            process = subprocess.Popen([*HARBOR_COMMAND,'run','-c',str(path)], env=runtime_env(credential_names), stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+            try:
+                while process.poll() is None:
+                    if stop.is_set():
+                        raise InterruptedError('Campaign stopped')
+                    if (static_bytes + folder_bytes(ROOT/'runs'))/1e9 >= settings['stop_folder_gb']:
+                        raise RuntimeError('Storage guard reached; stopping campaign')
+                    if progress:
+                        native = list((ROOT/'runs/jobs'/cell['job']).glob('*/agent/*.jsonl'))
+                        native += list((ROOT/'runs/jobs'/cell['job']).glob('*/agent/*.txt'))
+                        active = [p for p in native if p.stat().st_size]
+                        idle = min((time.time()-p.stat().st_mtime for p in active), default=None)
+                        event = None
+                        if active:
+                            last = max(active,key=lambda p:p.stat().st_mtime)
+                            with last.open('rb') as stream:
+                                stream.seek(max(0,last.stat().st_size-4096))
+                                for line in reversed(stream.read().decode(errors='replace').splitlines()):
+                                    try:
+                                        event = json.loads(line).get('type')
+                                        break
+                                    except (ValueError,AttributeError):
+                                        continue
+                        with lock:
                             progress('heartbeat', dict(cell,idle_seconds=idle,last_event=event))
-                        time.sleep(2)
-                except BaseException:
-                    if process.poll() is None:
-                        os.killpg(process.pid, signal.SIGINT)
-                    try:
-                        process.wait(timeout=15)
-                    except subprocess.TimeoutExpired:
-                        os.killpg(process.pid, signal.SIGKILL)
-                        process.wait()
-                    raise
-            latest = list((ROOT/'runs/jobs'/cell['job']).glob('*/result.json'))
-            result = read_json_object(latest[0]) if latest else {}
+                    time.sleep(2)
+            except BaseException:
+                if process.poll() is None:
+                    os.killpg(process.pid, signal.SIGINT)
+                try:
+                    process.wait(timeout=15)
+                except subprocess.TimeoutExpired:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.wait()
+                raise
+        latest = list((ROOT/'runs/jobs'/cell['job']).glob('*/result.json'))
+        result = read_json_object(latest[0]) if latest else {}
+        with lock:
             cell['returncode'] = process.returncode
             cell['finished_at'] = datetime.now(timezone.utc).isoformat()
-            if plan.get('local'):
+            if local and not cloud and not provider:
                 try:
                     with urllib.request.urlopen('http://127.0.0.1:11434/api/ps',timeout=5) as response:
                         cell['ollama_runtime_after'] = json.load(response)
@@ -524,16 +637,32 @@ def execute(plan, provider_cap=None, install_only=False, progress=None, settings
             report(campaign)  # results.csv and report.md stay current after every trial
             if progress:
                 progress('trial_end', dict(cell, result=result, returncode=process.returncode))
-            if process.returncode and not plan.get('local'):
-                raise RuntimeError(f'Harbor failed; see {log.name}')
-            latest = list((ROOT/'runs/jobs'/cell['job']).glob('*/result.json'))
-            error = read_json_object(latest[0]).get('exception_info') if latest else None
-            if plan.get('local'):
-                continue
-            if not latest or error:
-                raise RuntimeError('Trial infrastructure/agent error; campaign stopped to avoid wasting money')
+        if process.returncode and not local:
+            raise RuntimeError(f'Harbor failed; see {log.name}')
+        error = read_json_object(latest[0]).get('exception_info') if latest else None
+        if not local and (not latest or error):
+            raise RuntimeError('Trial infrastructure/agent error; campaign stopped to avoid wasting money')
+
+    def worker(cell):
+        if stop.is_set():
+            return
+        slot = slots.get()
+        try:
+            run_cell(cell, slot)
+        finally:
+            slots.put(slot)
+
+    try:
+        with ThreadPoolExecutor(workers) as pool:
+            futures = [pool.submit(worker, cell) for cell in manifest['cells']]
+            try:
+                for future in as_completed(futures):
+                    future.result()
+            except BaseException:
+                stop.set()  # running trials are interrupted and queued ones never start
+                raise
     finally:
-        if proxy:
+        for proxy in proxies:
             proxy.stop()
         manifest['state'] = 'interrupted' if sys.exc_info()[0] else 'finished'
         write_manifest(campaign, manifest)
@@ -560,6 +689,8 @@ def main():
     p.add_argument('--model', default='lfm3:1.7b')
     p.add_argument('--attempts', type=int, default=1)
     p.add_argument('--resume', type=Path, metavar='CAMPAIGN', help='Continue an interrupted campaign; finished trials are kept')
+    p.add_argument('--concurrency', type=int, help='Trials run at once (default 1 locally, 3 for Ollama cloud models)')
+    p.add_argument('--provider', help='Call an API provider from config/bench.toml (for example gemini) instead of local Ollama')
     p = sub.add_parser('report'); p.add_argument('campaign', type=Path)
     args = parser.parse_args()
     try:
@@ -568,10 +699,10 @@ def main():
         if args.command == 'report': report(args.campaign); return 0
         if args.command == 'local':
             if args.resume:
-                return execute(None, resume=args.resume)
+                return execute(None, resume=args.resume, concurrency=args.concurrency)
             names = args.harness or ['pi', 'opencode']
             models = dict.fromkeys(names, args.model)
-            return execute(build_plan(args.suite, names, models, args.attempts, local=True))
+            return execute(build_plan(args.suite, names, models, args.attempts, local=True), concurrency=args.concurrency, provider=args.provider)
         plan = build_plan(args.suite, args.harness or ['oracle'], parse_models(args.model), args.attempts)
         if args.command == 'plan': print(json.dumps(plan, indent=2)); return 0
         if args.command == 'install-check':
